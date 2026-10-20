@@ -1,0 +1,30 @@
+{
+  "short_name": "Lena Spa",
+  "name": "Lena Wellness & Spa",
+  "description": "Rejuvenate body, mind, and soul at Lena Wellness & Spa.",
+  "icons": [
+    {
+      "src": "favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    },
+    {
+      "src": "logo192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "logo512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#0B2545",
+  "background_color": "#FFFFFF",
+  "orientation": "portrait-primary",
+  "scope": "/"
+}

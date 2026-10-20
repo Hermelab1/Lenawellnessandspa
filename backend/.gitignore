@@ -1,0 +1,29 @@
+# Database backups
+PEDSDB/
+*.bak
+*.zip
+*.sql
+*.dump
+*.tar.gz
+
+# Dependencies
+node_modules/
+
+# Builds
+dist/
+build/
+.next/
+out/
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
