@@ -46,18 +46,17 @@ const TABS = [
 ];
 
 /* Pull balance info out of the various possible response shapes */
+/* Pull balance info out of the API response */
 const extractBalance = (res) => {
   const data = res?.data ?? {};
-  const raw = res?.raw?.data ?? data?.raw?.data ?? {};
   return {
     balance: data.balance ?? null,
     currency: data.currency || "ETB",
-    totalSms: raw.total_sms ?? data.total_sms ?? null,
-    totalAmount: raw.total_amount ?? data.total_amount ?? null,
+    totalSms: data.total_sms ?? null,
+    totalAmount: data.total_amount ?? null,
     warning: res?.warning || null,
   };
 };
-
 const SMSConfiguration = () => {
   const [activeTab, setActiveTab] = useState("credentials");
   const [isLoading, setIsLoading] = useState(true);
