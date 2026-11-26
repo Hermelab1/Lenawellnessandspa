@@ -45,7 +45,6 @@ const TABS = [
   { id: "behavior", label: "Behavior" },
 ];
 
-/* Pull balance info out of the various possible response shapes */
 /* Pull balance info out of the API response */
 const extractBalance = (res) => {
   const data = res?.data ?? {};
@@ -57,6 +56,7 @@ const extractBalance = (res) => {
     warning: res?.warning || null,
   };
 };
+
 const SMSConfiguration = () => {
   const [activeTab, setActiveTab] = useState("credentials");
   const [isLoading, setIsLoading] = useState(true);
