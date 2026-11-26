@@ -664,6 +664,9 @@ const sendOtp = async (req, res) => {
 
 /* ---------------------------------------------------------
  * GET /api/sms/balance
+ * GeezSMS returns:
+ * { error:false, msg:"Sufficient balance",
+ *   data:{ total_amount:"634.6275 ETB", total_sms:849, ... } }
  * -> { success, data: { balance, currency, total_sms, total_amount } }
  * --------------------------------------------------------- */
 const toNum = (v) => {
@@ -672,40 +675,21 @@ const toNum = (v) => {
   return Number.isFinite(n) ? n : null;
 };
 
-// Generic fallback: search the response for a numeric balance-like field
-const pickBalance = (obj, seen = new WeakSet()) => {
-  if (obj === null || obj === undefined) return null;
-  if (typeof obj === "number" || typeof obj === "string") return toNum(obj);
-  if (typeof obj !== "object") return null;
-  if (seen.has(obj)) return null;
-  seen.add(obj);
-
-  const keys = [
-    "balance",
-    "credit",
-    "credits",
-    "sms_balance",
-    "smsBalance",
-    "total_amount",
-    "total_sms",
-    "amount",
-    "remaining",
-    "available",
-    "units",
-  ];
-  for (const k of keys) {
-    if (obj[k] !== undefined && obj[k] !== null) {
-      const v = pickBalance(obj[k], seen);
-      if (v !== null) return v;
-    }
+// "634.6275 ETB" -> { amount: 634.6275, currency: "ETB" }
+const parseMoney = (v) => {
+  if (v === undefined || v === null || v === "") {
+    return { amount: null, currency: null };
   }
-  for (const k of ["data", "result", "response"]) {
-    if (obj[k] !== undefined) {
-      const v = pickBalance(obj[k], seen);
-      if (v !== null) return v;
-    }
+  if (typeof v === "number") {
+    return { amount: Number.isFinite(v) ? v : null, currency: null };
   }
-  return null;
+  const s = String(v).trim();
+  const numMatch = s.match(/-?[\d,]*\.?\d+/);
+  const curMatch = s.match(/[A-Za-z]{3}/);
+  return {
+    amount: numMatch ? toNum(numMatch[0]) : null,
+    currency: curMatch ? curMatch[0].toUpperCase() : null,
+  };
 };
 
 const getBalance = async (req, res) => {
@@ -723,15 +707,11 @@ const getBalance = async (req, res) => {
       { retries: retriesFor(config) },
     );
 
-    // TEMP: remove after confirming the shape (never log the token)
-    console.log("[SMS][getBalance] raw response:", JSON.stringify(response));
-
     // GeezSMS can answer 200 with an error body (e.g. invalid token)
     const failed =
       response?.error === true ||
       response?.success === false ||
-      response?.status === false ||
-      /error|fail|invalid/i.test(String(response?.status ?? ""));
+      response?.status === false;
     if (failed) {
       return res.status(502).json({
         success: false,
@@ -743,27 +723,22 @@ const getBalance = async (req, res) => {
       });
     }
 
-    // Body may be { data: {...} } or the fields directly
     const payload =
       response?.data && typeof response.data === "object"
         ? response.data
         : response;
 
     const totalSms = toNum(payload?.total_sms);
-    const totalAmount = toNum(payload?.total_amount);
+    const money = parseMoney(payload?.total_amount);
+    const totalAmount = money.amount;
 
-    // Prefer money amount, then SMS count, then generic search
-    let balance = totalAmount;
-    if (balance === null) balance = totalSms;
-    if (balance === null) balance = pickBalance(response);
-
+    // Main balance = money amount; fall back to SMS count
+    const balance = totalAmount !== null ? totalAmount : totalSms;
     const currency =
-      payload?.currency ||
-      response?.currency ||
-      config.balanceCurrency ||
-      "ETB";
+      money.currency || payload?.currency || config.balanceCurrency || "ETB";
 
     if (balance === null) {
+      console.warn("[SMS][getBalance] unexpected response shape");
       return res.status(200).json({
         success: true,
         data: {
