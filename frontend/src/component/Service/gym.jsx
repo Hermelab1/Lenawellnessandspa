@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { useLocation } from 'react-router-dom'
 import { webApi } from '../Api/apilist'
 import aboutImage from '../../asset/img/Herosection/herosection.jpg'
 import Footer from '../Footer/footer'
@@ -13,13 +13,34 @@ const API_ORIGIN = (process.env.REACT_APP_API_URL || 'http://localhost:3001/api'
 /* ---------- Helpers ---------- */
 const sortById = (list = []) => list.filter((i) => !i.isDeleted).sort((a, b) => a.id - b.id)
 
+// The API returns contentImages as a JSON array string of base64 data URIs
+// (e.g. '["data:image/jpeg;base64,..."]'). Older rows may hold a plain
+// comma-separated list of paths/URLs, so both shapes are supported.
+// NOTE: base64 contains commas, so a data URI must never be split on ','.
+const parseImageList = (value) => {
+  if (Array.isArray(value)) return value
+  const raw = String(value || '').trim()
+  if (!raw) return []
+  if (raw.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(raw)
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  }
+  if (raw.startsWith('data:')) return [raw]
+  return raw.split(',')
+}
+
 const getImages = (value) =>
-  (value || '')
-    .split(',')
-    .map((s) => s.trim())
+  parseImageList(value)
+    .map((s) => (typeof s === 'string' ? s.trim() : ''))
     .filter(Boolean)
     .map((src) =>
-      /^(https?:|data:)/.test(src) ? src : `${API_ORIGIN}/${src.replace(/^\//, '')}`
+      /^(https?:|data:|blob:)/.test(src) || src.startsWith('//')
+        ? src
+        : `${API_ORIGIN}/${src.replace(/^\//, '')}`
     )
 
 const clean = (s = '') => s.replace(/\s+/g, ' ').trim()
@@ -37,8 +58,16 @@ const parseCard = (text = '') => {
 
 const parsePackage = (text = '') => {
   const lines = toLines(text)
-  const [title, price, ...features] = lines
-  return { title: title || '', price: price || '', features }
+  const [title, ...rest] = lines
+  // The 2nd line is only a price if it looks like one ("0 Birr", "$20", "Free", "500 ETB / month").
+  // Otherwise it is already the first feature (e.g. the "Lena" and "Royal" plans have no price line).
+  const looksLikePrice = (l = '') => /^free\b|[$€£]\s*\d|\d\s*(birr|etb|usd|br)\b/i.test(l.trim())
+  const hasPrice = rest.length > 0 && looksLikePrice(rest[0])
+  return {
+    title: title || '',
+    price: hasPrice ? rest[0] : '',
+    features: hasPrice ? rest.slice(1) : rest,
+  }
 }
 
 const parseSchedule = (contents) => {
@@ -107,6 +136,29 @@ const Check = () => (
   </svg>
 )
 
+/* ---------- Membership registration helpers ---------- */
+const todayLocal = () => {
+  const d = new Date()
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${mm}-${dd}`
+}
+
+// Sends the registration to the API and normalises the result.
+const submitMembership = async (payload) => {
+  try {
+    const res = await webApi.createMembershipRequest(payload)
+    return res?.success
+      ? { ok: true }
+      : { ok: false, message: res?.message || 'Could not send your registration.' }
+  } catch (err) {
+    return {
+      ok: false,
+      message: err?.response?.data?.message || 'Could not send your registration. Please try again.',
+    }
+  }
+}
+
 /* =====================================================
    HERO
 ===================================================== */
@@ -121,48 +173,65 @@ const HeroSection = ({ section }) => {
     return () => clearInterval(timer)
   }, [heroImages.length])
 
-  const mainTitle = contents[1]?.content?.trim() || contents[0]?.content?.trim()
+  // Banner content: first line = small label ("LENA GYM & FITNESS"), remaining lines = headline.
+  const lines = contents.flatMap((c) => toLines(c.content))
+  const [eyebrow, ...titleLines] = lines.length > 1 ? lines : ['', ...lines]
+  const mainTitle = titleLines.join(' ')
 
   return (
     <section id="hero" className="relative overflow-hidden bg-[#0B2545] text-white">
-      {heroImages.length > 0 && (
+      {heroImages.map((src, i) => (
         <div
-          className="absolute inset-0 bg-cover bg-center transition-all duration-[1200ms]"
-          style={{ backgroundImage: `url(${heroImages[current]})`, transform: 'scale(1.06)' }}
+          key={i}
+          aria-hidden="true"
+          className={`absolute inset-0 bg-cover bg-center ${i === current ? 'opacity-100' : 'opacity-0'}`}
+          style={{
+            backgroundImage: `url("${src}")`,
+            transform: i === current ? 'scale(1.06)' : 'scale(1)',
+            transition: 'opacity 1200ms ease, transform 7000ms ease-out',
+          }}
         />
-      )}
-      <div className="absolute inset-0 bg-gradient-to-b from-[#0B2545]/70 via-[#0B2545]/45 to-[#0B2545]/85" />
+      ))}
+      <div className="absolute inset-0 bg-[#0B2545]/70" />
 
-      <div className="relative mx-auto flex max-w-6xl flex-col items-center px-6 py-20 text-center sm:py-28">
-        {contents[0] && (
-          <Reveal>
-            <Eyebrow dark>{contents[0].content}</Eyebrow>
+      <div className="relative mx-auto flex min-h-[45vh] max-w-6xl items-center justify-center px-6 py-16 sm:py-20">
+        <div className="max-w-2xl text-center">
+          {eyebrow && (
+            <Reveal>
+              <div className="flex items-center justify-center gap-3">
+                <span className="h-px w-8 bg-[#A3E635]" />
+                <Eyebrow dark>{eyebrow}</Eyebrow>
+                <span className="h-px w-8 bg-[#A3E635]" />
+              </div>
+            </Reveal>
+          )}
+          <Reveal delay={100}>
+            <h1 className="mt-4 font-serif text-xl font-bold leading-snug sm:text-2xl lg:text-3xl">
+              {mainTitle}
+            </h1>
           </Reveal>
-        )}
-
-        <Reveal delay={150}>
-          <h1 className="mt-4 max-w-4xl font-serif text-4xl font-bold uppercase leading-tight drop-shadow-[0_2px_12px_rgba(11,37,69,0.7)] sm:text-5xl lg:text-6xl">
-            {mainTitle}
-          </h1>
-        </Reveal>
-
-        <Reveal delay={300}>
-          <p className="mt-6 max-w-2xl text-lg text-white/85">
-            Where strength meets serenity — train, recover, and elevate body and mind.
-          </p>
-        </Reveal>
-
-        <Reveal delay={450}>
-          <div className="mt-8 flex flex-wrap items-center justify-center gap-4">
-            <Link to="/contact" className="rounded-full bg-[#A3E635] px-8 py-3 text-sm font-bold text-[#0B2545] transition duration-200 hover:-translate-y-0.5 hover:bg-[#D9F99D]">
-              Start Training
-            </Link>
-            <Link to="/ourservice" className="rounded-full border border-[#A3E635]/60 px-8 py-3 text-sm font-semibold text-[#A3E635] transition duration-200 hover:bg-[#A3E635]/10">
-              View Services
-            </Link>
-          </div>
-        </Reveal>
+          <Reveal delay={300}>
+            <div className="mx-auto mt-5 h-1 w-16 rounded-full bg-[#A3E635]" />
+          </Reveal>
+        </div>
       </div>
+
+      {heroImages.length > 1 && (
+        <div className="absolute inset-x-0 bottom-6 z-20 flex justify-center gap-2">
+          {heroImages.map((_, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => setCurrent(i)}
+              aria-label={`Go to slide ${i + 1}`}
+              aria-current={i === current}
+              className={`h-1.5 rounded-full transition-all duration-300 ${
+                i === current ? 'w-8 bg-[#A3E635]' : 'w-4 bg-white/40 hover:bg-white/70'
+              }`}
+            />
+          ))}
+        </div>
+      )}
     </section>
   )
 }
@@ -403,11 +472,245 @@ const ScheduleSection = ({ section }) => {
 }
 
 /* =====================================================
+   MEMBERSHIP POPUP (opens when a plan is chosen)
+===================================================== */
+const emptyForm = {
+  fullName: '',
+  gender: '',
+  dateOfBirth: '',
+  email: '',
+  phone: '',
+  address: '',
+  emergencyName: '',
+  emergencyPhone: '',
+  startDate: '',
+  paymentMethod: '',
+  notes: '',
+  agree: false,
+}
+
+const MembershipModal = ({ plan, onClose }) => {
+  const [form, setForm] = useState(emptyForm)
+  const [submitted, setSubmitted] = useState(false)
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState('')
+  const today = todayLocal()
+
+  // close on ESC + lock page scroll while open
+  useEffect(() => {
+    const onKey = (e) => e.key === 'Escape' && onClose()
+    document.addEventListener('keydown', onKey)
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prevOverflow
+    }
+  }, [onClose])
+
+  const handleChange = (e) => {
+    const { name, value, type, checked } = e.target
+    setForm((f) => ({ ...f, [name]: type === 'checkbox' ? checked : value }))
+  }
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setSending(true)
+    setError('')
+    const result = await submitMembership({
+      planTitle: plan.title,
+      planPrice: plan.price,
+      fullName: form.fullName,
+      gender: form.gender,
+      dateOfBirth: form.dateOfBirth,
+      email: form.email,
+      phone: form.phone,
+      address: form.address,
+      emergencyName: form.emergencyName,
+      emergencyPhone: form.emergencyPhone,
+      startDate: form.startDate,
+      paymentMethod: form.paymentMethod,
+      notes: form.notes,
+      agree: form.agree,
+    })
+    setSending(false)
+    if (result.ok) setSubmitted(true)
+    else setError(result.message)
+  }
+
+  const inputBase =
+    'w-full rounded-xl border border-white/15 bg-white/[0.06] px-4 py-2 text-sm text-white placeholder-white/40 outline-none transition focus:border-[#A3E635] focus:bg-white/[0.1]'
+  const label = 'mb-1 block text-xs font-semibold uppercase tracking-wider text-white/60'
+  const opt = 'text-[#0B2545]'
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm sm:items-center"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Membership registration - ${plan.title}`}
+    >
+      <div
+        className="relative my-4 grid w-full max-w-5xl overflow-hidden rounded-3xl bg-[#0B2545] text-white shadow-2xl md:grid-cols-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="absolute right-4 top-4 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-xl leading-none text-white transition hover:bg-[#A3E635] hover:text-[#0B2545]"
+        >
+          ×
+        </button>
+
+        {/* Selected package summary */}
+        <div className="relative flex flex-col bg-gradient-to-br from-[#13315c] to-[#0B2545] p-8 md:col-span-2">
+          <div className="pointer-events-none absolute -left-16 -top-16 h-56 w-56 rounded-full bg-[#A3E635]/10 blur-3xl" />
+          <div className="relative">
+            <Eyebrow dark>Selected Membership</Eyebrow>
+            <h3 className="mt-3 font-serif text-2xl font-bold text-[#A3E635]">{plan.title}</h3>
+            {plan.price && <div className="mt-2 text-3xl font-bold">{plan.price}</div>}
+            <div className="my-5 h-0.5 w-12 rounded-full bg-[#A3E635]" />
+            <ul className="space-y-3">
+              {plan.features.map((f, i) => (
+                <li key={i} className="flex items-start gap-3 text-sm text-white/85">
+                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#A3E635] text-[#0B2545]">
+                    <Check />
+                  </span>
+                  {f}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+
+        {/* Membership form */}
+        <div className="p-8 md:col-span-3">
+          {submitted ? (
+            <div className="flex h-full min-h-[20rem] flex-col items-center justify-center text-center">
+              <span className="flex h-14 w-14 items-center justify-center rounded-full bg-[#A3E635] text-[#0B2545]">
+                <Check />
+              </span>
+              <h4 className="mt-5 font-serif text-2xl font-bold">Welcome to Lena!</h4>
+              <p className="mt-2 text-white/75">
+                Your membership request for the <span className="font-semibold text-[#A3E635]">{plan.title}</span> plan
+                has been received. We'll contact you shortly to complete your registration.
+              </p>
+              <button
+                type="button"
+                onClick={onClose}
+                className="mt-6 rounded-full bg-[#A3E635] px-8 py-3 text-sm font-bold text-[#0B2545] transition hover:bg-[#D9F99D]"
+              >
+                Close
+              </button>
+            </div>
+          ) : (
+            <>
+              <h4 className="font-serif text-2xl font-bold">Membership Registration</h4>
+              <p className="mt-1 text-sm text-white/70">Complete your details to join the {plan.title} plan.</p>
+
+              {error && (
+                <div className="mt-4 rounded-xl border border-red-400/50 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                  {error}
+                </div>
+              )}
+
+              <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+                <div>
+                  <label className={label} htmlFor="fullName">Full name *</label>
+                  <input id="fullName" type="text" name="fullName" required value={form.fullName} onChange={handleChange} className={inputBase} />
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className={label} htmlFor="gender">Gender *</label>
+                    <select id="gender" name="gender" required value={form.gender} onChange={handleChange} className={`${inputBase} appearance-none`}>
+                      <option value="" className={opt}>Select</option>
+                      <option value="Male" className={opt}>Male</option>
+                      <option value="Female" className={opt}>Female</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className={label} htmlFor="dateOfBirth">Date of birth *</label>
+                    <input id="dateOfBirth" type="date" name="dateOfBirth" required max={today} value={form.dateOfBirth} onChange={handleChange} className={inputBase} />
+                  </div>
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className={label} htmlFor="phone">Phone *</label>
+                    <input id="phone" type="tel" name="phone" required value={form.phone} onChange={handleChange} className={inputBase} />
+                  </div>
+                  <div>
+                    <label className={label} htmlFor="email">Email</label>
+                    <input id="email" type="email" name="email" value={form.email} onChange={handleChange} className={inputBase} />
+                  </div>
+                </div>
+
+                <div>
+                  <label className={label} htmlFor="address">Address</label>
+                  <input id="address" type="text" name="address" value={form.address} onChange={handleChange} className={inputBase} />
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className={label} htmlFor="emergencyName">Emergency contact *</label>
+                    <input id="emergencyName" type="text" name="emergencyName" required value={form.emergencyName} onChange={handleChange} className={inputBase} />
+                  </div>
+                  <div>
+                    <label className={label} htmlFor="emergencyPhone">Emergency phone *</label>
+                    <input id="emergencyPhone" type="tel" name="emergencyPhone" required value={form.emergencyPhone} onChange={handleChange} className={inputBase} />
+                  </div>
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className={label} htmlFor="startDate">Membership start date *</label>
+                    <input id="startDate" type="date" name="startDate" required min={today} value={form.startDate} onChange={handleChange} className={inputBase} />
+                  </div>
+                  <div>
+                    <label className={label} htmlFor="paymentMethod">Payment method *</label>
+                    <select id="paymentMethod" name="paymentMethod" required value={form.paymentMethod} onChange={handleChange} className={`${inputBase} appearance-none`}>
+                      <option value="" className={opt}>Select</option>
+                      <option value="Cash" className={opt}>Cash</option>
+                      <option value="Mobile Money" className={opt}>Mobile Money</option>
+                      <option value="Bank Transfer" className={opt}>Bank Transfer</option>
+                    </select>
+                  </div>
+                </div>
+
+                <textarea name="notes" rows="2" placeholder="Fitness goals or anything we should know? (optional)" value={form.notes} onChange={handleChange} className={inputBase} />
+
+                <label className="flex items-start gap-3 text-sm text-white/75">
+                  <input type="checkbox" name="agree" required checked={form.agree} onChange={handleChange} className="mt-1 h-4 w-4 accent-[#A3E635]" />
+                  <span>I agree to the gym rules and membership terms.</span>
+                </label>
+
+                <button
+                  type="submit"
+                  disabled={sending}
+                  className="w-full rounded-full bg-[#A3E635] px-8 py-3 text-sm font-bold text-[#0B2545] transition duration-200 hover:-translate-y-0.5 hover:bg-[#D9F99D] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {sending ? 'Sending…' : 'Join Now'}
+                </button>
+              </form>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* =====================================================
    PACKAGES — this section has id="packages" (hash target)
 ===================================================== */
 const PackagesSection = ({ section }) => {
   const contents = sortById(section.contents)
   const packages = contents.map((c) => ({ id: c.id, ...parsePackage(c.content) }))
+  const [selectedPlan, setSelectedPlan] = useState(null)
+  const closeModal = useCallback(() => setSelectedPlan(null), [])
 
   if (!packages.length) return null
 
@@ -462,9 +765,9 @@ const PackagesSection = ({ section }) => {
                     ))}
                   </ul>
 
-                  <Link
-                    to={`/register-membership?plan=${encodeURIComponent(pkg.title)}`}
-                    state={{ plan: pkg }}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPlan(pkg)}
                     className={`mt-8 inline-block rounded-full px-6 py-3 text-center text-sm font-bold transition duration-200 hover:-translate-y-0.5 ${
                       featured
                         ? 'bg-[#A3E635] text-[#0B2545] hover:bg-[#D9F99D]'
@@ -472,140 +775,15 @@ const PackagesSection = ({ section }) => {
                     }`}
                   >
                     Choose Plan
-                  </Link>
+                  </button>
                 </article>
               </Reveal>
             )
           })}
         </div>
       </div>
-    </section>
-  )
-}
 
-/* =====================================================
-   RESERVATION
-===================================================== */
-const ReservationSection = ({ section }) => {
-  const [form, setForm] = useState({
-    name: '',
-    email: '',
-    phone: '',
-    date: '',
-    time: '',
-    service: '',
-    message: '',
-  })
-  const [submitted, setSubmitted] = useState(false)
-
-  const contents = section ? sortById(section.contents) : []
-  const [image] = contents.flatMap((c) => getImages(c.contentImages))
-
-  const handleChange = (e) => setForm((f) => ({ ...f, [e.target.name]: e.target.value }))
-
-  const handleSubmit = (e) => {
-    e.preventDefault()
-    setSubmitted(true)
-    setTimeout(() => setSubmitted(false), 5000)
-    setForm({ name: '', email: '', phone: '', date: '', time: '', service: '', message: '' })
-  }
-
-  const inputBase =
-    'w-full rounded-xl border border-white/15 bg-white/[0.06] px-4 py-3 text-sm text-white placeholder-white/40 outline-none transition focus:border-[#A3E635] focus:bg-white/[0.1]'
-
-  return (
-    <section id="reservation" className="relative overflow-hidden bg-[#0B2545] py-20 text-white sm:py-24">
-      <div className="pointer-events-none absolute -left-24 -top-24 h-80 w-80 rounded-full bg-[#A3E635]/10 blur-3xl" />
-      <div className="pointer-events-none absolute -bottom-32 -right-20 h-96 w-96 rounded-full bg-[#13315c]/60 blur-3xl" />
-
-      <div className="relative mx-auto max-w-6xl px-6">
-        <div className="grid items-center gap-12 lg:grid-cols-2 lg:gap-16">
-          <div>
-            <Reveal>
-              <Eyebrow dark>Book Your Session</Eyebrow>
-              <h2 className="mt-3 font-serif text-3xl font-bold text-white sm:text-4xl">
-                {section?.sectionName?.trim() || 'Reservation'}
-              </h2>
-              <div className="mt-4 h-1 w-16 rounded-full bg-[#A3E635]" />
-              <p className="mt-6 text-lg leading-relaxed text-white/75">
-                Reserve your spot in minutes. Tell us what you'd like to do and when — we'll confirm shortly.
-              </p>
-            </Reveal>
-
-            <Reveal delay={120}>
-              {submitted && (
-                <div className="mt-6 rounded-xl border border-[#A3E635]/50 bg-[#A3E635]/10 px-4 py-3 text-sm text-[#A3E635]">
-                  ✓ Thank you! Your reservation request has been received.
-                </div>
-              )}
-
-              <form onSubmit={handleSubmit} className="mt-8 space-y-4">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <input type="text" name="name" required placeholder="Full name *" value={form.name} onChange={handleChange} className={inputBase} />
-                  <input type="email" name="email" required placeholder="Email *" value={form.email} onChange={handleChange} className={inputBase} />
-                </div>
-
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <input type="tel" name="phone" required placeholder="Phone *" value={form.phone} onChange={handleChange} className={inputBase} />
-                  <select name="service" required value={form.service} onChange={handleChange} className={`${inputBase} appearance-none`}>
-                    <option value="" className="text-[#0B2545]">Choose a service *</option>
-                    <option value="Personal Training" className="text-[#0B2545]">Personal Training</option>
-                    <option value="Group Classes" className="text-[#0B2545]">Group Classes</option>
-                    <option value="Weight Training" className="text-[#0B2545]">Weight Training</option>
-                    <option value="Cardio Training" className="text-[#0B2545]">Cardio Training</option>
-                    <option value="Nutrition Coaching" className="text-[#0B2545]">Nutrition Coaching</option>
-                    <option value="Spa Session" className="text-[#0B2545]">Spa Session</option>
-                  </select>
-                </div>
-
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <input type="date" name="date" required value={form.date} onChange={handleChange} className={inputBase} />
-                  <input type="time" name="time" required value={form.time} onChange={handleChange} className={inputBase} />
-                </div>
-
-                <textarea name="message" rows="4" placeholder="Anything we should know? (optional)" value={form.message} onChange={handleChange} className={inputBase} />
-
-                <button type="submit" className="inline-block rounded-full bg-[#A3E635] px-8 py-3 text-sm font-bold text-[#0B2545] transition duration-200 hover:-translate-y-0.5 hover:bg-[#D9F99D]">
-                  Reserve Now
-                </button>
-              </form>
-            </Reveal>
-          </div>
-
-          <Reveal delay={150} className="relative">
-            <div className="absolute -bottom-4 -left-4 hidden h-full w-full rounded-3xl border-2 border-[#A3E635] sm:block" />
-            <img
-              src={image || aboutImage}
-              alt="Reserve a session at Lena"
-              loading="lazy"
-              className="relative z-10 h-80 w-full rounded-3xl object-cover shadow-2xl sm:h-[32rem]"
-            />
-            <div className="relative z-20 mx-auto -mt-16 max-w-sm rounded-2xl bg-white p-6 text-[#0B2545] shadow-2xl lg:mx-0 lg:ml-auto lg:-mt-24">
-              <h3 className="font-serif text-xl font-bold">Open Hours</h3>
-              <div className="mt-4 space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-[#0B2545]/60">Mon – Fri</span>
-                  <span className="font-semibold">6:00 AM – 10:00 PM</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[#0B2545]/60">Saturday</span>
-                  <span className="font-semibold">7:00 AM – 9:00 PM</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[#0B2545]/60">Sunday</span>
-                  <span className="font-semibold">8:00 AM – 8:00 PM</span>
-                </div>
-              </div>
-              <div className="mt-5 flex items-center gap-2 border-t border-[#0B2545]/10 pt-4 text-sm">
-                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#A3E635] text-[#0B2545]">
-                  <Check />
-                </span>
-                <span className="text-[#0B2545]/75">Instant confirmation via call / SMS</span>
-              </div>
-            </div>
-          </Reveal>
-        </div>
-      </div>
+      {selectedPlan && <MembershipModal plan={selectedPlan} onClose={closeModal} />}
     </section>
   )
 }
@@ -871,25 +1049,26 @@ const Gym = () => {
   const services = byName('our fitness services')
   const schedule = byName('time grinds')
   const packages = byName('packages')
-  const reservation = byName('reservation') || byName('reservations') || byName('booking')
   const coaches = byName('coachs') || byName('coaches')
 
-  const known = new Set([hero, services, schedule, packages, reservation, coaches].filter(Boolean))
+  // Hide any CMS "reservation" section — membership registration now happens in the plan popup
+  const hiddenNames = new Set(['footer', 'reservation', 'reservations', 'booking'])
+
+  const known = new Set([hero, services, schedule, packages, coaches].filter(Boolean))
   const extras = sections.filter((s) => {
     const n = s.sectionName.trim().toLowerCase()
-    if (n === 'footer') return false
+    if (hiddenNames.has(n)) return false
     return !known.has(s)
   })
 
   return (
     <>
       <main className="overflow-x-hidden bg-white">
-        {/* ORDER: Hero → Services → Time Grinds → Packages → Reservation → Coaches */}
+        {/* ORDER: Hero → Services → Time Grinds → Packages → Coaches */}
         {hero && <HeroSection section={hero} />}
         {services && <ServicesSection section={services} />}
         {schedule && <ScheduleSection section={schedule} />}
         {packages && <PackagesSection section={packages} />}
-        <ReservationSection section={reservation} />
         {coaches && <CoachesSection section={coaches} />}
 
         {extras.map((s) => (

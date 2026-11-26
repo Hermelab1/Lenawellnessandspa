@@ -7,9 +7,42 @@ module.exports = (sequelize, DataTypes) => {
         primaryKey: true,
         autoIncrement: true,
       },
+      Type: {
+        type: DataTypes.ENUM(
+          "Reservation",
+          "Test",
+          "Expire reminder",
+          "OTP",
+          "Bulk",
+          "Other",
+        ),
+        allowNull: false,
+        defaultValue: "Other",
+      },
+      Phone: {
+        type: DataTypes.STRING(20),
+        allowNull: true,
+      },
+      Message: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
       status: {
         type: DataTypes.STRING,
         allowNull: false,
+        defaultValue: "pending",
+      },
+      providerLogId: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
+      providerResponse: {
+        type: DataTypes.JSON,
+        allowNull: true,
+      },
+      errorDetail: {
+        type: DataTypes.TEXT,
+        allowNull: true,
       },
       lastSyncedAt: {
         type: DataTypes.DATE,
@@ -17,7 +50,7 @@ module.exports = (sequelize, DataTypes) => {
       },
     },
     {
-      tableName: "sms_sync_status", // Ensure this table exists or let Sequelize create it
+      tableName: "sms_sync_status",
       timestamps: true,
     },
   );

@@ -60,6 +60,16 @@ const seedSecurityData = async () => {
         submodule: "Service",
         moduleDescription: "Gym services",
       },
+      {
+        moduleName: "Gym",
+        submodule: "Service Booking",
+        moduleDescription: "Gym service booking",
+      },
+      {
+        moduleName: "Gym",
+        submodule: "Membership Request",
+        moduleDescription: "Gym membership requests",
+      },
 
       // ---------- Setting : SMS (expanded) ----------
       {
@@ -144,12 +154,14 @@ const seedSecurityData = async () => {
       {
         RoleName: "Admin",
         RoleDescription: "System administrator - full access",
+        isActive: true,
       },
       {
         RoleName: "Manager",
         RoleDescription: "Manager with limited admin access",
+        isActive: true,
       },
-      { RoleName: "User", RoleDescription: "Standard user" },
+      { RoleName: "User", RoleDescription: "Standard user", isActive: true },
     ];
 
     const roles = [];
@@ -181,6 +193,7 @@ const seedSecurityData = async () => {
        ============================================================ */
     const adminEmail = "admin@lenawellness.com";
     const adminPassword = "Admin@123";
+    const isActive = true;
 
     let adminUser = await db.SecUser.findOne({ where: { email: adminEmail } });
 
@@ -190,6 +203,7 @@ const seedSecurityData = async () => {
         userfullname: "System Administrator",
         email: adminEmail,
         password: await bcrypt.hash(adminPassword, 10),
+        isActive: isActive,
       });
       console.log(`✅ Created default admin user: ${adminEmail}`);
     } else {
@@ -227,77 +241,50 @@ const seedSecurityData = async () => {
       );
     }
 
-    /* ============================================================
-       9. SEED SMS PROVIDERS + TEMPLATES (optional defaults)
-       ============================================================ */
-    if (db.SmsProvider) {
-      const smsProviders = [
-        {
-          providerName: "Twilio",
-          apiUrl: "https://api.twilio.com/2010-04-01",
-          apiKey: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-          apiSecret: "your_auth_token_here",
-          senderId: "+1234567890",
-          countryCode: "+880",
-          isDefault: true,
-          isActive: false, // keep disabled until real keys are set
-        },
-        {
-          providerName: "BulkSMSBD",
-          apiUrl: "https://bulksmsbd.net/api/smsapi",
-          apiKey: "your_api_key_here",
-          apiSecret: "your_api_secret_here",
-          senderId: "LENAWELL",
-          countryCode: "+880",
-          isDefault: false,
-          isActive: false,
-        },
-      ];
-
-      for (const p of smsProviders) {
-        await db.SmsProvider.findOrCreate({
-          where: { providerName: p.providerName },
-          defaults: p,
-        });
-      }
-      console.log(`✅ Seeded ${smsProviders.length} SMS providers (inactive)`);
-    } else {
-      console.log("ℹ️  db.SmsProvider not found — skipping SMS provider seed");
-    }
-
     if (db.SmsTemplate) {
+      const extractVariables = (body = "") => {
+        const found = new Set();
+        const re = /{{\s*([a-zA-Z0-9_]+)\s*}}/g;
+        let m;
+        while ((m = re.exec(body))) found.add(m[1]);
+        return [...found];
+      };
+
       const smsTemplates = [
         {
-          templateName: "Welcome SMS",
+          name: "Welcome SMS",
+          code: "welcome_sms",
+          category: "general",
           body: "Welcome {{name}} to Lena Wellness! Your account is now active.",
-          category: "Notification",
-          isActive: true,
         },
         {
-          templateName: "OTP",
+          name: "OTP",
+          code: "otp_login",
+          category: "otp",
           body: "Your Lena Wellness OTP is {{otp}}. Valid for 5 minutes.",
-          category: "OTP",
-          isActive: true,
         },
         {
-          templateName: "Membership Expiry Reminder",
+          name: "Membership Expiry Reminder",
+          code: "membership_expiry",
+          category: "alert",
           body: "Hi {{name}}, your {{plan}} membership expires on {{date}}. Please renew to continue.",
-          category: "Notification",
-          isActive: true,
         },
       ];
 
       for (const t of smsTemplates) {
         await db.SmsTemplate.findOrCreate({
-          where: { templateName: t.templateName },
-          defaults: t,
+          where: { code: t.code }, // code is the unique key
+          defaults: {
+            ...t,
+            variables: extractVariables(t.body),
+            isActive: true,
+          },
         });
       }
       console.log(`✅ Seeded ${smsTemplates.length} SMS templates`);
     } else {
       console.log("ℹ️  db.SmsTemplate not found — skipping SMS template seed");
     }
-
     console.log("🌱 Security seeding completed!\n");
     return { modules, actions, permissions, roles };
   } catch (error) {

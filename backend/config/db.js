@@ -42,6 +42,7 @@ async function initSequelize() {
 }
 
 // ---------- SQL Server (mssql) ----------
+// DB_SERVERNAME can be "HOST" or "HOST\\INSTANCE"
 const [serverHost, instanceName] = (process.env.DB_SERVERNAME || "").split(
   "\\",
 );
@@ -50,18 +51,25 @@ const mssqlConfig = {
   user: process.env.DB_USERSQL,
   password: process.env.DB_PASSWORDSQL,
   server: serverHost || "localhost",
-  port: Number(process.env.DB_PORTSQL) || 1433,
   database: process.env.DB_NAMESQL || "PEDSPMS",
   options: {
     encrypt: false,
     trustServerCertificate: true,
     enableArithAbort: true,
-    instanceName: instanceName || undefined,
   },
   pool: { max: 10, min: 0, idleTimeoutMillis: 30000 },
   connectionTimeout: 15000,
-  requestTimeout: 30000,
+  requestTimeout: 60000,
 };
+
+// `port` and `instanceName` are mutually exclusive in the tedious driver.
+// Named instance -> use instanceName (resolved through SQL Browser, UDP 1434).
+// No instance    -> use the port.
+if (instanceName) {
+  mssqlConfig.options.instanceName = instanceName;
+} else {
+  mssqlConfig.port = Number(process.env.DB_PORTSQL) || 1433;
+}
 
 let mssqlPoolPromise = null;
 
@@ -71,7 +79,10 @@ function getMssqlPool() {
       .connect()
       .then((pool) => {
         console.log(`✅ Connected to SQL Server: ${mssqlConfig.database}`);
-        pool.on("error", (err) => console.error("MSSQL pool error:", err));
+        pool.on("error", (err) => {
+          console.error("MSSQL pool error:", err);
+          mssqlPoolPromise = null; // force a fresh pool on next call
+        });
         return pool;
       })
       .catch((err) => {

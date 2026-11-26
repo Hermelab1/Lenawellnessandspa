@@ -3,7 +3,7 @@ const express = require("express");
 const cors = require("cors");
 const { initSequelize, getMssqlPool } = require("./config/db");
 const db = require("./models");
-const syncService = require("./services/syncService");
+const syncService = require("./services/syncservice");
 
 const app = express();
 
@@ -36,6 +36,9 @@ function mountRoutes() {
   app.use("/api/modules", require("./routes/moduleroute"));
   app.use("/api", require("./routes/webroute"));
   app.use("/api", require("./routes/securityroute"));
+  app.use("/api", require("./routes/reservationroute"));
+  app.use("/api/sms", require("./routes/smsconfigurationroute"));
+  app.use("/api/sms/templates", require("./routes/smstemplateroute"));
   app.use("/api", makeMemberRoutes(db));
 
   /* ---------- Error handler (must be LAST) ---------- */

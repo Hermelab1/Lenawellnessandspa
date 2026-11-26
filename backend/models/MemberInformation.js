@@ -4,7 +4,6 @@ module.exports = (sequelize, DataTypes) => {
     {
       Id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
       external_id: { type: DataTypes.INTEGER, unique: true, allowNull: true },
-
       Name: { type: DataTypes.STRING(300) },
       Gender: { type: DataTypes.INTEGER },
       Nationality: { type: DataTypes.STRING(100) },
@@ -29,6 +28,13 @@ module.exports = (sequelize, DataTypes) => {
       Picture: { type: DataTypes.BLOB("long") },
       QRCode: { type: DataTypes.BLOB("long") },
       Signature: { type: DataTypes.BLOB("long") },
+
+      // NEW: used by the Deactivate button
+      IsActive: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: true,
+      },
 
       mssql_updated_at: { type: DataTypes.DATE, allowNull: true },
       synced_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },

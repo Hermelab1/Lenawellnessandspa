@@ -5,7 +5,6 @@ const bcrypt = require("bcrypt");
    ROLE MANAGEMENT
    ============================================================ */
 
-// GET all roles
 async function allrole(req, res) {
   try {
     const roles = await db.SecRole.findAll({
@@ -19,7 +18,6 @@ async function allrole(req, res) {
       ],
       order: [["id", "ASC"]],
     });
-
     return res.status(200).json({ success: true, data: roles });
   } catch (error) {
     console.error("allrole error:", error);
@@ -27,12 +25,25 @@ async function allrole(req, res) {
   }
 }
 
-// CREATE role
+async function getActiveRoles(req, res) {
+  try {
+    const roles = await db.SecRole.findAll({
+      where: { isActive: true },
+    });
+    return res.status(200).json({ success: true, data: roles });
+  } catch (error) {
+    console.error("getActiveRoles error:", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+}
+
 async function addrole(req, res) {
   try {
     const RoleName = req.body.RoleName ?? req.body.roleName;
     const RoleDescription =
       req.body.RoleDescription ?? req.body.description ?? "";
+    const isActive =
+      req.body.isActive !== undefined ? !!req.body.isActive : true;
 
     if (!RoleName) {
       return res
@@ -40,7 +51,11 @@ async function addrole(req, res) {
         .json({ success: false, message: "RoleName is required" });
     }
 
-    const role = await db.SecRole.create({ RoleName, RoleDescription });
+    const role = await db.SecRole.create({
+      RoleName,
+      RoleDescription,
+      isActive,
+    });
     return res.status(201).json({ success: true, data: role });
   } catch (error) {
     console.error("addrole error:", error);
@@ -48,13 +63,14 @@ async function addrole(req, res) {
   }
 }
 
-// UPDATE role
 async function updaterole(req, res) {
   try {
     const { id } = req.params;
     const RoleName = req.body.RoleName ?? req.body.roleName;
     const RoleDescription =
       req.body.RoleDescription ?? req.body.description ?? "";
+    const isActive =
+      req.body.isActive !== undefined ? !!req.body.isActive : undefined;
 
     const role = await db.SecRole.findByPk(id);
     if (!role) {
@@ -63,7 +79,10 @@ async function updaterole(req, res) {
         .json({ success: false, message: "Role not found" });
     }
 
-    await role.update({ RoleName, RoleDescription });
+    const updates = { RoleName, RoleDescription };
+    if (isActive !== undefined) updates.isActive = isActive;
+
+    await role.update(updates);
     return res.status(200).json({ success: true, data: role });
   } catch (error) {
     console.error("updaterole error:", error);
@@ -71,21 +90,55 @@ async function updaterole(req, res) {
   }
 }
 
-// DELETE role
 async function deleterole(req, res) {
+  const t = await db.sequelize.transaction();
   try {
     const { id } = req.params;
-    const role = await db.SecRole.findByPk(id);
+
+    const role = await db.SecRole.findByPk(id, { transaction: t });
     if (!role) {
+      await t.rollback();
       return res
         .status(404)
         .json({ success: false, message: "Role not found" });
     }
-    await role.destroy();
+
+    const userCount = await db.Secusermember.count({
+      where: { roleId: id },
+      transaction: t,
+    });
+
+    const permissionCount = await db.SecRolePermission.count({
+      where: { roleId: id },
+      transaction: t,
+    });
+
+    if (userCount > 0 || permissionCount > 0) {
+      await db.SecRolePermission.destroy({
+        where: { roleId: id },
+        transaction: t,
+      });
+      await role.update({ isActive: false }, { transaction: t });
+      await t.commit();
+      return res.status(200).json({
+        success: true,
+        message:
+          "Role is assigned to users or has permissions, so it was deactivated instead of deleted. It can no longer be used.",
+        data: { id: role.id, isActive: false },
+      });
+    }
+
+    await db.SecRolePermission.destroy({
+      where: { roleId: id },
+      transaction: t,
+    });
+    await role.destroy({ transaction: t });
+    await t.commit();
     return res
       .status(200)
       .json({ success: true, message: "Role deleted successfully" });
   } catch (error) {
+    await t.rollback();
     console.error("deleterole error:", error);
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -95,7 +148,6 @@ async function deleterole(req, res) {
    PERMISSIONS
    ============================================================ */
 
-// GET all permissions
 async function allpermissions(req, res) {
   try {
     const permissions = await db.SecPermission.findAll({
@@ -105,7 +157,6 @@ async function allpermissions(req, res) {
       ],
       order: [["id", "ASC"]],
     });
-
     return res.status(200).json({ success: true, permissions });
   } catch (error) {
     console.error("allpermissions error:", error);
@@ -113,7 +164,6 @@ async function allpermissions(req, res) {
   }
 }
 
-// GET permissions assigned to a role
 async function getrolepermission(req, res) {
   try {
     const { roleId } = req.params;
@@ -145,7 +195,6 @@ async function getrolepermission(req, res) {
   }
 }
 
-// ASSIGN permissions to role (bulk)
 async function assignPermissionsToRole(req, res) {
   const t = await db.sequelize.transaction();
   try {
@@ -167,13 +216,31 @@ async function assignPermissionsToRole(req, res) {
         .json({ success: false, message: "Role not found" });
     }
 
+    if (permissionIds.length > 0) {
+      const existing = await db.SecPermission.findAll({
+        where: { id: permissionIds },
+        attributes: ["id"],
+        transaction: t,
+      });
+      const existingIds = new Set(existing.map((p) => String(p.id)));
+      const missing = permissionIds.filter(
+        (id) => !existingIds.has(String(id)),
+      );
+      if (missing.length > 0) {
+        await t.rollback();
+        return res.status(400).json({
+          success: false,
+          message: `Unknown permissionIds: ${missing.join(", ")}`,
+        });
+      }
+    }
+
     await db.SecRolePermission.destroy({ where: { roleId }, transaction: t });
 
     const rows = permissionIds.map((permissionId) => ({
       roleId,
       permissionId,
     }));
-
     if (rows.length) {
       await db.SecRolePermission.bulkCreate(rows, { transaction: t });
     }
@@ -192,29 +259,56 @@ async function assignPermissionsToRole(req, res) {
 /* ============================================================
    USER MANAGEMENT
    ============================================================ */
-
-// CREATE user
 async function adduser(req, res) {
   const t = await db.sequelize.transaction();
   try {
-    const { logincode, userfullname, email, password, roleIds } = req.body;
+    const { logincode, userfullname, email, password, roleIds, isActive } =
+      req.body;
 
-    if (!logincode || !userfullname || !email || !password) {
+    const missing = [];
+    if (!logincode) missing.push("logincode");
+    if (!userfullname) missing.push("userfullname");
+    if (!email) missing.push("email");
+    if (!password) missing.push("password");
+
+    if (missing.length) {
       await t.rollback();
       return res.status(400).json({
         success: false,
-        message: "logincode, userfullname, email, password are required",
+        message: `Missing required fields: ${missing.join(", ")}`,
+        received: Object.keys(req.body),
+      });
+    }
+
+    // Guard against duplicate logincode / email
+    const existing = await db.SecUser.findOne({
+      where: {
+        [db.Sequelize.Op.or]: [{ logincode }, { email }],
+      },
+      transaction: t,
+    });
+    if (existing) {
+      await t.rollback();
+      const field = existing.logincode === logincode ? "logincode" : "email";
+      return res.status(409).json({
+        success: false,
+        message: `A user with this ${field} already exists`,
       });
     }
 
     const hashed = await bcrypt.hash(password, 10);
-
     const user = await db.SecUser.create(
-      { logincode, userfullname, email, password: hashed },
+      {
+        logincode,
+        userfullname,
+        email,
+        password: hashed,
+        isActive: isActive !== undefined ? isActive : true,
+      },
       { transaction: t },
     );
 
-    if (Array.isArray(roleIds) && roleIds.length > 0) {
+    if (roleIds.length) {
       const rows = roleIds.map((roleId) => ({ userId: user.id, roleId }));
       await db.Secusermember.bulkCreate(rows, { transaction: t });
     }
@@ -227,7 +321,6 @@ async function adduser(req, res) {
         { model: db.SecRole, as: "roles", through: { attributes: [] } },
       ],
     });
-
     return res.status(201).json({ success: true, data: created });
   } catch (error) {
     await t.rollback();
@@ -236,12 +329,12 @@ async function adduser(req, res) {
   }
 }
 
-// UPDATE user
 async function updateuser(req, res) {
   const t = await db.sequelize.transaction();
   try {
     const { id } = req.params;
-    const { logincode, userfullname, email, password, roleIds } = req.body;
+    const { logincode, userfullname, email, password, roleIds, isActive } =
+      req.body;
 
     const user = await db.SecUser.findByPk(id, { transaction: t });
     if (!user) {
@@ -251,21 +344,29 @@ async function updateuser(req, res) {
         .json({ success: false, message: "User not found" });
     }
 
-    const updates = { logincode, userfullname, email };
-    if (password) {
-      updates.password = await bcrypt.hash(password, 10);
+    // Only update fields that were actually provided
+    const updates = {};
+    if (logincode !== undefined) updates.logincode = logincode;
+    if (userfullname !== undefined) updates.userfullname = userfullname;
+    if (email !== undefined) updates.email = email;
+    if (isActive !== undefined) updates.isActive = isActive;
+    if (password) updates.password = await bcrypt.hash(password, 10);
+
+    if (Object.keys(updates).length) {
+      await user.update(updates, { transaction: t });
     }
 
-    await user.update(updates, { transaction: t });
-
-    if (Array.isArray(roleIds)) {
+    // Replace role memberships only if role info was sent
+    if (Array.isArray(req.body.roleIds) || req.body.roleId !== undefined) {
       await db.Secusermember.destroy({
         where: { userId: id },
         transaction: t,
       });
-      const rows = roleIds.map((roleId) => ({ userId: id, roleId }));
-      if (rows.length) {
-        await db.Secusermember.bulkCreate(rows, { transaction: t });
+      if (roleIds.length) {
+        await db.Secusermember.bulkCreate(
+          roleIds.map((roleId) => ({ userId: id, roleId })),
+          { transaction: t },
+        );
       }
     }
 
@@ -277,7 +378,6 @@ async function updateuser(req, res) {
         { model: db.SecRole, as: "roles", through: { attributes: [] } },
       ],
     });
-
     return res.status(200).json({ success: true, data: updated });
   } catch (error) {
     await t.rollback();
@@ -286,24 +386,20 @@ async function updateuser(req, res) {
   }
 }
 
-// GET user's roles
 async function getuserrole(req, res) {
   try {
     const { userId } = req.params;
-
     const user = await db.SecUser.findByPk(userId, {
       attributes: { exclude: ["password"] },
       include: [
         { model: db.SecRole, as: "roles", through: { attributes: [] } },
       ],
     });
-
     if (!user) {
       return res
         .status(404)
         .json({ success: false, message: "User not found" });
     }
-
     return res.status(200).json({ success: true, data: user });
   } catch (error) {
     console.error("getuserrole error:", error);
@@ -311,7 +407,6 @@ async function getuserrole(req, res) {
   }
 }
 
-// GET all users
 async function allusers(req, res) {
   try {
     const users = await db.SecUser.findAll({
@@ -319,6 +414,7 @@ async function allusers(req, res) {
       include: [
         { model: db.SecRole, as: "roles", through: { attributes: [] } },
       ],
+      order: [["id", "ASC"]],
     });
     return res.status(200).json({ success: true, data: users });
   } catch (error) {
@@ -327,7 +423,6 @@ async function allusers(req, res) {
   }
 }
 
-// DELETE user
 async function deleteuser(req, res) {
   try {
     const { id } = req.params;
@@ -337,25 +432,72 @@ async function deleteuser(req, res) {
         .status(404)
         .json({ success: false, message: "User not found" });
     }
-    await user.destroy();
-    return res.status(200).json({ success: true, message: "User deleted" });
+    // Soft delete — set isActive = false
+    await user.update({ isActive: false });
+    return res.status(200).json({
+      success: true,
+      message: "User deactivated",
+      data: { id: user.id, isActive: false },
+    });
   } catch (error) {
-    console.error("deleteuser error:", error);
+    console.error("deactivateuser error:", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+async function userreport(req, res) {
+  try {
+    const users = await db.SecUser.findAll({
+      attributes: { exclude: ["password"] },
+      include: [
+        { model: db.SecRole, as: "roles", through: { attributes: [] } },
+      ],
+      order: [["id", "ASC"]],
+    });
+    return res.status(200).json({ success: true, data: users });
+  } catch (error) {
+    console.error("userreport error:", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+async function rolereports(req, res) {
+  try {
+    const roles = await db.SecRole.findAll({
+      include: [
+        {
+          model: db.SecUser,
+          as: "users",
+          attributes: ["id", "logincode", "userfullname", "email"],
+          through: { attributes: [] },
+        },
+      ],
+      order: [["id", "ASC"]],
+    });
+    return res.status(200).json({ success: true, data: roles });
+  } catch (error) {
+    console.error("rolereports error:", error);
     return res.status(500).json({ success: false, message: error.message });
   }
 }
 
 module.exports = {
+  // roles
+  getActiveRoles,
   allrole,
   addrole,
   updaterole,
   deleterole,
+  // permissions
   allpermissions,
   getrolepermission,
   assignPermissionsToRole,
+  // users
   adduser,
   updateuser,
   getuserrole,
   allusers,
   deleteuser,
+  userreport,
+  rolereports,
 };

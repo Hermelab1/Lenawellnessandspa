@@ -174,21 +174,60 @@ const ContactInfo = ({ className = '' }) => (
   </div>
 )
 
+/* ---------- Logo (matches the Lena Wellness brand image) ---------- */
+const LOGO_GREEN = '#A6E22E'
+
 const Logo = () => (
-  <Link to="/" aria-label="Lena Wellness and Spa - Home" className="flex items-center gap-3 no-underline">
-    <svg className="h-12 w-12 shrink-0" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <circle cx="32" cy="32" r="30" fill="#0B2545" stroke="#A3E635" strokeWidth="2" />
-      <path d="M32 46 C18 44 12 32 14 24 C24 26 30 34 32 46Z" fill="#A3E635" opacity="0.75" />
-      <path d="M32 46 C46 44 52 32 50 24 C40 26 34 34 32 46Z" fill="#A3E635" opacity="0.75" />
-      <path d="M32 46 C22 42 20 30 24 20 C30 25 33 34 32 46Z" fill="#A3E635" opacity="0.9" />
-      <path d="M32 46 C42 42 44 30 40 20 C34 25 31 34 32 46Z" fill="#A3E635" opacity="0.9" />
-      <path d="M32 46 C26 38 26 26 32 14 C38 26 38 38 32 46Z" fill="#D9F99D" />
-      <path d="M18 50 Q25 46 32 50 T46 50" fill="none" stroke="#A3E635" strokeWidth="2" strokeLinecap="round" />
+  <Link to="/" aria-label="Lena Wellness - Home" className="flex items-center no-underline">
+    <svg
+      className="h-14 w-auto shrink-0 sm:h-16"
+      viewBox="150 90 1180 620"
+      xmlns="http://www.w3.org/2000/svg"
+      role="img"
+      aria-hidden="true"
+    >
+      {/* Letters drawn as thick rounded strokes */}
+      <g
+        fill="none"
+        stroke={LOGO_GREEN}
+        strokeWidth="48"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        {/* L */}
+        <path d="M204 215 V500 H385" />
+
+        {/* e */}
+        <path d="M648 452 C612 492 560 508 515 497 C440 480 404 420 414 340 C424 262 480 215 540 215 C612 215 652 262 640 322 C628 382 540 418 440 397" />
+
+        {/* N */}
+        <path d="M728 500 V215 L949 498 V212" />
+
+        {/* A */}
+        <path d="M1048 500 V300 C1048 242 1090 212 1155 212 C1222 212 1262 246 1262 300 V500" />
+        <path d="M1078 408 C1100 372 1130 362 1160 362 C1200 362 1236 382 1262 408" />
+      </g>
+
+      {/* Thin swoosh crossing the e */}
+      <path
+        d="M565 110 C440 132 340 220 345 300 C348 352 382 388 432 398 C386 376 356 340 361 295 C367 220 452 140 565 110 Z"
+        fill={LOGO_GREEN}
+      />
+
+      {/* WELLNESS */}
+      <text
+        x="330"
+        y="680"
+        fill={LOGO_GREEN}
+        fontFamily="'Helvetica Neue', Arial, sans-serif"
+        fontSize="82"
+        fontWeight="400"
+        textLength="815"
+        lengthAdjust="spacing"
+      >
+        WELLNESS
+      </text>
     </svg>
-    <span className="flex flex-col leading-none">
-      <span className="font-serif text-2xl font-bold tracking-wide text-[#A3E635]">Lena</span>
-      <span className="mt-1 text-[0.65rem] uppercase tracking-[0.25em] text-white/85">Wellness &amp; Spa</span>
-    </span>
   </Link>
 )
 

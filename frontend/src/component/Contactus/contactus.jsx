@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { webApi } from '../Api/apilist'
 
 // Section ids from your API (GET /contents/section/:id)
@@ -14,6 +15,8 @@ const socialLinks = [
   { name: 'Telegram', href: 'https://t.me/', icon: 'telegram' },
 ]
 
+const EMPTY_FORM = { name: '', phone: '', email: '', message: '' }
+
 /* ---------- Helpers ---------- */
 const firstContent = (res) =>
   res?.success && Array.isArray(res.data)
@@ -23,7 +26,7 @@ const firstContent = (res) =>
 // Parses the section-12 text block:
 // heading \n paragraph \n\n Call Us \n number \n Email Us \n email \n Location \n line1 \n line2
 const parseInfo = (text = '') => {
-  const lines = text
+  const lines = (text || '')
     .split('\n')
     .map((l) => l.trim())
     .filter(Boolean)
@@ -47,9 +50,54 @@ const parseInfo = (text = '') => {
 
 // Only accept a Google Maps embed URL from the stored iframe HTML (safer than injecting raw HTML)
 const getMapSrc = (html = '') => {
-  const match = html.match(/src="([^"]+)"/i)
+  const match = (html || '').match(/src="([^"]+)"/i)
   const src = match?.[1]?.replace(/&amp;/g, '&')
   return src && src.startsWith('https://www.google.com/maps/embed') ? src : ''
+}
+
+/* ---------- Reveal ---------- */
+const Reveal = ({ children, className = '', delay = 0 }) => {
+  const ref = useRef(null)
+  const [visible, setVisible] = useState(false)
+
+  useEffect(() => {
+    const node = ref.current
+    if (!node) return undefined
+
+    const reduceMotion =
+      typeof window !== 'undefined' &&
+      window.matchMedia &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+    if (reduceMotion || typeof IntersectionObserver === 'undefined') {
+      setVisible(true)
+      return undefined
+    }
+
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setVisible(true)
+          io.unobserve(node)
+        }
+      },
+      { threshold: 0.08, rootMargin: '0px 0px -6% 0px' }
+    )
+    io.observe(node)
+    return () => io.disconnect()
+  }, [])
+
+  return (
+    <div
+      ref={ref}
+      style={{ transitionDelay: `${delay}ms` }}
+      className={`transform-gpu transition-all duration-700 ease-out motion-reduce:transition-none ${
+        visible ? 'translate-y-0 opacity-100' : 'translate-y-8 opacity-0'
+      } ${className}`}
+    >
+      {children}
+    </div>
+  )
 }
 
 /* ---------- Icons ---------- */
@@ -81,6 +129,51 @@ const InfoIcon = ({ type }) => (
   </svg>
 )
 
+const ChevronRight = () => (
+  <svg
+    viewBox="0 0 24 24"
+    className="h-3 w-3"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2.5"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="m9 6 6 6-6 6" />
+  </svg>
+)
+
+const ArrowRight = () => (
+  <svg
+    viewBox="0 0 24 24"
+    className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2.5"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M5 12h14M13 6l6 6-6 6" />
+  </svg>
+)
+
+const SendIcon = () => (
+  <svg
+    viewBox="0 0 24 24"
+    className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2.2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z" />
+  </svg>
+)
+
 const socialPaths = {
   facebook: (
     <path d="M13.5 21v-7.5h2.6l.4-3h-3V8.6c0-.9.3-1.5 1.6-1.5h1.5V4.4c-.3 0-1.2-.1-2.2-.1-2.3 0-3.9 1.4-3.9 4v2.2H7.9v3h2.6V21h3z" />
@@ -101,39 +194,44 @@ const socialPaths = {
 }
 
 /* ---------- Pieces ---------- */
-const InfoRow = ({ icon, label, children, href }) => (
-  <div className="flex items-start gap-4">
-    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-[#A3E635]/60 bg-[#A3E635]/15 text-[#0B2545]">
-      <InfoIcon type={icon} />
-    </div>
-    <div>
-      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#0B2545]/55">
-        {label}
-      </p>
-      {href ? (
-        <a
-          href={href}
-          className="mt-1 block text-lg font-semibold text-[#0B2545] transition-colors hover:text-[#4d7c0f]"
-        >
+const InfoCard = ({ icon, label, children, href, external }) => {
+  const body = (
+    <div className="group flex items-start gap-4 rounded-2xl border border-[#0B2545]/10 bg-white p-5 shadow-sm shadow-[#0B2545]/5 transition-all duration-300 hover:-translate-y-0.5 hover:border-[#A3E635]/60 hover:shadow-lg hover:shadow-[#0B2545]/10">
+      <div className="flex h-[3.25rem] w-[3.25rem] shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-[#0B2545] to-[#13315c] text-[#A3E635] shadow-md shadow-[#0B2545]/20 transition-all duration-300 group-hover:from-[#A3E635] group-hover:to-[#84cc16] group-hover:text-[#0B2545]">
+        <InfoIcon type={icon} />
+      </div>
+      <div className="min-w-0">
+        <p className="text-[11px] font-bold uppercase tracking-[0.25em] text-[#4d7c0f]">{label}</p>
+        <div className="mt-1 break-words text-base font-semibold leading-snug text-[#0B2545] sm:text-lg">
           {children}
-        </a>
-      ) : (
-        <div className="mt-1 text-lg font-semibold leading-snug text-[#0B2545]">{children}</div>
-      )}
+        </div>
+      </div>
     </div>
-  </div>
-)
+  )
+
+  return href ? (
+    <a
+      href={href}
+      {...(external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+      className="block rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-[#A3E635] focus-visible:ring-offset-2"
+    >
+      {body}
+    </a>
+  ) : (
+    body
+  )
+}
 
 const inputClass =
   'w-full rounded-xl border border-[#0B2545]/15 bg-white px-4 py-3 text-[#0B2545] placeholder-[#0B2545]/35 outline-none transition focus:border-[#A3E635] focus:ring-2 focus:ring-[#A3E635]/50'
 
-const Field = ({ label, required, children }) => (
-  <label className="block">
-    <span className="mb-1.5 block text-sm font-semibold text-[#0B2545]">
+const Field = ({ label, required, htmlFor, children }) => (
+  <div>
+    <label htmlFor={htmlFor} className="mb-1.5 block text-sm font-semibold text-[#0B2545]">
       {label} {required && <span className="text-[#4d7c0f]">*</span>}
-    </span>
+    </label>
     {children}
-  </label>
+  </div>
 )
 
 /* ---------- Page ---------- */
@@ -144,7 +242,7 @@ const ContactUs = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  const [form, setForm] = useState({ name: '', phone: '', email: '', message: '' })
+  const [form, setForm] = useState(EMPTY_FORM)
   const [sent, setSent] = useState(false)
 
   useEffect(() => {
@@ -177,12 +275,28 @@ const ContactUs = () => {
 
   const phoneHref = useMemo(() => `tel:${info.phone.replace(/[^\d+]/g, '')}`, [info.phone])
 
-  const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value })
+  const directionsHref = useMemo(
+    () =>
+      info.location.length > 0
+        ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+            info.location.join(', ')
+          )}`
+        : '',
+    [info.location]
+  )
+
+  const handleChange = (e) => {
+    const { name, value } = e.target
+    setSent(false)
+    setForm((f) => ({ ...f, [name]: value }))
+  }
 
   // No "inquiry" endpoint exists in apilist yet, so this opens the visitor's email app
   // addressed to the email from the API. Replace with an API call when your backend is ready.
   const handleSubmit = (e) => {
     e.preventDefault()
+    if (!info.email) return
+
     const body = [
       `Name: ${form.name}`,
       `Phone: ${form.phone}`,
@@ -198,181 +312,318 @@ const ContactUs = () => {
     )}&body=${encodeURIComponent(body)}`
 
     setSent(true)
-    setForm({ name: '', phone: '', email: '', message: '' })
+    setForm(EMPTY_FORM)
   }
 
   if (loading) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center bg-white">
-        <div className="h-10 w-10 animate-spin rounded-full border-4 border-[#0B2545]/20 border-t-[#A3E635]" />
+      <div
+        className="flex min-h-[60vh] flex-col items-center justify-center gap-5 bg-white"
+        role="status"
+        aria-live="polite"
+      >
+        <div className="h-12 w-12 animate-spin rounded-full border-[3px] border-[#0B2545]/10 border-t-[#A3E635]" />
+        <p className="text-xs font-semibold uppercase tracking-[0.3em] text-[#0B2545]/40">
+          Loading
+        </p>
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center bg-white px-6 text-center text-[#0B2545]/70">
-        {error}
+      <div
+        className="flex min-h-[60vh] items-center justify-center bg-white px-6 text-center"
+        role="alert"
+      >
+        <div className="max-w-md">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#0B2545] text-[#A3E635]">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="h-7 w-7"
+              aria-hidden="true"
+            >
+              <path d="M12 9v4M12 17h.01M10.3 3.9 2.7 18a2 2 0 0 0 1.7 3h15.2a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
+            </svg>
+          </div>
+          <p className="mt-5 text-[#0B2545]/70">{error}</p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="mt-6 rounded-full bg-[#0B2545] px-6 py-2.5 text-sm font-bold text-[#A3E635] transition hover:bg-[#13315c]"
+          >
+            Try again
+          </button>
+        </div>
       </div>
     )
   }
 
   return (
-    <main className="bg-white">
-      {/* HERO (section 11) */}
-      <section className="relative overflow-hidden bg-[#0B2545] text-white">
-        <div className="pointer-events-none absolute -left-24 -top-24 h-80 w-80 rounded-full bg-[#A3E635]/20 blur-3xl" />
-        <div className="pointer-events-none absolute -bottom-32 -right-20 h-96 w-96 rounded-full bg-[#13315c] blur-3xl" />
+    <main className="overflow-x-clip bg-white">
+      {/* HERO (section 11) — compact */}
+      <section className="relative isolate overflow-hidden bg-[#0B2545] text-white min-h-[45vh]">
+        <div className="pointer-events-none absolute -left-32 -top-32 -z-10 h-80 w-80 rounded-full bg-[#A3E635]/15 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-40 -right-24 -z-10 h-96 w-96 rounded-full bg-[#13315c]/70 blur-3xl" />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 -z-10 opacity-[0.06]"
+          style={{
+            backgroundImage:
+              'linear-gradient(to right, #A3E635 1px, transparent 1px), linear-gradient(to bottom, #A3E635 1px, transparent 1px)',
+            backgroundSize: '48px 48px',
+          }}
+        />
 
-        <div className="relative mx-auto flex max-w-6xl flex-col items-center px-6 py-20 text-center sm:py-28">
-          <span className="text-xs font-semibold uppercase tracking-[0.3em] text-[#A3E635]">
-            Contact Us
-          </span>
-          <h1 className="mt-4 font-serif text-4xl font-bold leading-tight sm:text-5xl lg:text-6xl">
-            {eyebrow || 'Reach Out To Us'}
-          </h1>
-          <div className="mt-6 h-1 w-20 rounded-full bg-[#A3E635]" />
+        <div className="relative mx-auto flex max-w-4xl flex-col items-center px-6 py-14 text-center sm:py-16">
+          <Reveal>
+            <nav aria-label="Breadcrumb">
+              <ol className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.25em] text-white/70 backdrop-blur-md">
+                <li>
+                  <Link to="/" className="transition-colors hover:text-[#A3E635]">
+                    Home
+                  </Link>
+                </li>
+                <li aria-hidden="true" className="text-[#A3E635]">
+                  <ChevronRight />
+                </li>
+                <li aria-current="page" className="text-[#A3E635]">
+                  Contact Us
+                </li>
+              </ol>
+            </nav>
+          </Reveal>
+
+          <Reveal delay={120}>
+            <h1 className="mt-5 max-w-3xl font-serif text-2xl font-bold leading-[1.2] tracking-tight drop-shadow-lg sm:text-3xl lg:text-4xl">
+              {eyebrow || 'Reach Out To Us'}
+            </h1>
+          </Reveal>
+
+          <Reveal delay={240}>
+            <div className="mt-6 h-[3px] w-16 rounded-full bg-gradient-to-r from-[#A3E635] to-[#4d7c0f]" />
+          </Reveal>
         </div>
+
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-[#A3E635]/50 to-transparent" />
       </section>
 
-      <section className="mx-auto grid max-w-6xl gap-12 px-6 py-20 lg:grid-cols-2 lg:gap-16">
-        {/* LEFT: info */}
-        <div>
-          <h2 className="font-serif text-4xl font-bold leading-tight text-[#0B2545] sm:text-5xl">
-            {info.heading}
-          </h2>
-          <div className="mt-4 h-1 w-16 rounded-full bg-[#A3E635]" />
+      {/* INFO + FORM */}
+      <section className="relative overflow-hidden bg-white py-16 sm:py-20 lg:py-24">
+        <div className="pointer-events-none absolute right-0 top-20 h-72 w-72 rounded-full bg-[#A3E635]/10 blur-3xl" />
 
-          {info.paragraph && (
-            <p className="mt-6 text-lg leading-relaxed text-[#0B2545]/75">{info.paragraph}</p>
-          )}
+        <div className="relative mx-auto grid max-w-6xl gap-12 px-6 lg:grid-cols-2 lg:gap-16">
+          {/* LEFT: info */}
+          <Reveal>
+            <span className="inline-flex items-center gap-3 text-[11px] font-bold uppercase tracking-[0.32em] text-[#4d7c0f]">
+              <span className="h-px w-8 bg-[#4d7c0f]/40" />
+              Get In Touch
+            </span>
 
-          <div className="mt-10 space-y-7">
-            {info.phone && (
-              <InfoRow icon="phone" label="Call Us" href={phoneHref}>
-                {info.phone}
-              </InfoRow>
+            {info.heading && (
+              <h2 className="mt-4 font-serif text-3xl font-bold leading-tight text-[#0B2545] sm:text-4xl lg:text-[2.6rem]">
+                {info.heading}
+              </h2>
             )}
-            {info.email && (
-              <InfoRow icon="mail" label="Email Us" href={`mailto:${info.email}`}>
-                {info.email}
-              </InfoRow>
+            <div className="mt-5 h-[3px] w-14 rounded-full bg-gradient-to-r from-[#A3E635] to-[#4d7c0f]" />
+
+            {info.paragraph && (
+              <p className="mt-6 text-[17px] leading-[1.85] text-[#0B2545]/75">{info.paragraph}</p>
             )}
-            {info.location.length > 0 && (
-              <InfoRow icon="pin" label="Location">
-                {info.location.map((line) => (
-                  <div key={line}>{line}</div>
-                ))}
-              </InfoRow>
-            )}
-          </div>
 
-          <div className="mt-10 border-t border-[#0B2545]/10 pt-8">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#0B2545]/55">
-              Follow Us
-            </p>
-            <div className="mt-4 flex items-center gap-3">
-              {socialLinks.map((s) => (
-                <a
-                  key={s.name}
-                  href={s.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  aria-label={s.name}
-                  title={s.name}
-                  className="flex h-10 w-10 items-center justify-center rounded-full border border-[#0B2545]/20 text-[#0B2545] transition duration-200 hover:-translate-y-0.5 hover:border-[#A3E635] hover:bg-[#A3E635]"
-                >
-                  <svg viewBox="0 0 24 24" fill="currentColor" className="h-[18px] w-[18px]" aria-hidden="true">
-                    {socialPaths[s.icon]}
-                  </svg>
-                </a>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* RIGHT: form */}
-        <div className="rounded-3xl border border-[#0B2545]/10 bg-white p-8 shadow-xl shadow-[#0B2545]/10 sm:p-10">
-          <h2 className="font-serif text-3xl font-bold text-[#0B2545]">Send an Inquiry</h2>
-          <p className="mt-2 text-[#0B2545]/70">
-            Have a question or custom request? Fill in your details below.
-          </p>
-
-          <form onSubmit={handleSubmit} className="mt-8 space-y-5">
-            <div className="grid gap-5 sm:grid-cols-2">
-              <Field label="Full Name" required>
-                <input
-                  name="name"
-                  type="text"
-                  required
-                  placeholder="John Doe"
-                  value={form.name}
-                  onChange={handleChange}
-                  className={inputClass}
-                />
-              </Field>
-              <Field label="Phone Number" required>
-                <input
-                  name="phone"
-                  type="tel"
-                  required
-                  placeholder="0911000000"
-                  value={form.phone}
-                  onChange={handleChange}
-                  className={inputClass}
-                />
-              </Field>
+            <div className="mt-8 space-y-4">
+              {info.phone && (
+                <InfoCard icon="phone" label="Call Us" href={phoneHref}>
+                  {info.phone}
+                </InfoCard>
+              )}
+              {info.email && (
+                <InfoCard icon="mail" label="Email Us" href={`mailto:${info.email}`}>
+                  {info.email}
+                </InfoCard>
+              )}
+              {info.location.length > 0 && (
+                <InfoCard icon="pin" label="Location" href={directionsHref} external>
+                  {info.location.map((line) => (
+                    <div key={line}>{line}</div>
+                  ))}
+                  <span className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#4d7c0f]">
+                    Get directions
+                    <ArrowRight />
+                  </span>
+                </InfoCard>
+              )}
             </div>
 
-            <Field label="Email Address">
-              <input
-                name="email"
-                type="email"
-                placeholder="example@domain.com"
-                value={form.email}
-                onChange={handleChange}
-                className={inputClass}
-              />
-            </Field>
-
-            <Field label="Message / Requirements">
-              <textarea
-                name="message"
-                rows={5}
-                placeholder="Tell us how we can help you..."
-                value={form.message}
-                onChange={handleChange}
-                className={`${inputClass} resize-none`}
-              />
-            </Field>
-
-            <button
-              type="submit"
-              className="w-full rounded-xl bg-[#A3E635] py-3.5 text-base font-bold text-[#0B2545] shadow-lg shadow-[#A3E635]/30 transition duration-200 hover:-translate-y-0.5 hover:bg-[#bef264] active:scale-[0.99]"
-            >
-              Send Message
-            </button>
-
-            {sent && (
-              <p className="rounded-xl bg-[#A3E635]/15 px-4 py-3 text-sm text-[#0B2545]">
-                Thank you! Your email app has opened with your message. Just press send.
+            <div className="mt-10 border-t border-[#0B2545]/10 pt-8">
+              <p className="text-[11px] font-bold uppercase tracking-[0.25em] text-[#0B2545]/55">
+                Follow Us
               </p>
-            )}
-          </form>
+              <div className="mt-4 flex items-center gap-3">
+                {socialLinks.map((s) => (
+                  <a
+                    key={s.name}
+                    href={s.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={s.name}
+                    title={s.name}
+                    className="flex h-11 w-11 items-center justify-center rounded-full border border-[#0B2545]/15 text-[#0B2545] transition duration-200 hover:-translate-y-0.5 hover:border-[#A3E635] hover:bg-[#A3E635] hover:shadow-lg hover:shadow-[#A3E635]/30"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="currentColor"
+                      className="h-[18px] w-[18px]"
+                      aria-hidden="true"
+                    >
+                      {socialPaths[s.icon]}
+                    </svg>
+                  </a>
+                ))}
+              </div>
+            </div>
+          </Reveal>
+
+          {/* RIGHT: form */}
+          <Reveal delay={120}>
+            <div className="relative overflow-hidden rounded-3xl border border-[#0B2545]/10 bg-white p-8 shadow-2xl shadow-[#0B2545]/10 sm:p-10">
+              <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#A3E635] via-[#4d7c0f] to-transparent" />
+
+              <p className="text-[11px] font-bold uppercase tracking-[0.25em] text-[#4d7c0f]">
+                Inquiry Form
+              </p>
+              <h2 className="mt-2 font-serif text-2xl font-bold text-[#0B2545] sm:text-3xl">
+                Send an Inquiry
+              </h2>
+              <p className="mt-2 text-[#0B2545]/70">
+                Have a question or custom request? Fill in your details below.
+              </p>
+
+              <form onSubmit={handleSubmit} className="mt-8 space-y-5">
+                <div className="grid gap-5 sm:grid-cols-2">
+                  <Field label="Full Name" required htmlFor="contact-name">
+                    <input
+                      id="contact-name"
+                      name="name"
+                      type="text"
+                      required
+                      autoComplete="name"
+                      placeholder="John Doe"
+                      value={form.name}
+                      onChange={handleChange}
+                      className={inputClass}
+                    />
+                  </Field>
+                  <Field label="Phone Number" required htmlFor="contact-phone">
+                    <input
+                      id="contact-phone"
+                      name="phone"
+                      type="tel"
+                      required
+                      autoComplete="tel"
+                      placeholder="0911000000"
+                      value={form.phone}
+                      onChange={handleChange}
+                      className={inputClass}
+                    />
+                  </Field>
+                </div>
+
+                <Field label="Email Address" htmlFor="contact-email">
+                  <input
+                    id="contact-email"
+                    name="email"
+                    type="email"
+                    autoComplete="email"
+                    placeholder="example@domain.com"
+                    value={form.email}
+                    onChange={handleChange}
+                    className={inputClass}
+                  />
+                </Field>
+
+                <Field label="Message / Requirements" htmlFor="contact-message">
+                  <textarea
+                    id="contact-message"
+                    name="message"
+                    rows={5}
+                    placeholder="Tell us how we can help you..."
+                    value={form.message}
+                    onChange={handleChange}
+                    className={`${inputClass} resize-none`}
+                  />
+                </Field>
+
+                <button
+                  type="submit"
+                  disabled={!info.email}
+                  className="group inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#A3E635] py-3.5 text-base font-bold text-[#0B2545] shadow-lg shadow-[#A3E635]/30 transition duration-200 hover:-translate-y-0.5 hover:bg-[#b6f04f] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
+                >
+                  Send Message
+                  <SendIcon />
+                </button>
+
+                <div aria-live="polite">
+                  {sent && (
+                    <p className="flex items-start gap-3 rounded-xl border border-[#A3E635]/50 bg-[#A3E635]/15 px-4 py-3 text-sm text-[#0B2545]">
+                      <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#A3E635]">
+                        <svg
+                          viewBox="0 0 24 24"
+                          className="h-3 w-3"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="3.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="m5 12.5 4.5 4.5L19 7.5" />
+                        </svg>
+                      </span>
+                      Thank you! Your email app has opened with your message. Just press send.
+                    </p>
+                  )}
+                </div>
+              </form>
+            </div>
+          </Reveal>
         </div>
       </section>
 
       {/* MAP */}
       {mapSrc && (
-        <section className="w-full">
-          <iframe
-            title="Lena Wellness & Spa location"
-            src={mapSrc}
-            className="block h-[28rem] w-full border-0 sm:h-[36rem]"
-            allowFullScreen
-            loading="lazy"
-            referrerPolicy="no-referrer-when-downgrade"
-          />
+        <section className="bg-[#0B2545]/[0.035] pt-12 sm:pt-20">
+          <div className="mx-auto">
+            <Reveal>
+              <div className="mb-10 text-center">
+                <span className="inline-flex items-center gap-3 text-[11px] font-bold uppercase tracking-[0.32em] text-[#4d7c0f]">
+                  <span className="h-px w-8 bg-[#4d7c0f]/40" />
+                  Find Us
+                  <span className="h-px w-8 bg-[#4d7c0f]/40" />
+                </span>
+                <h2 className="mt-4 font-serif text-3xl font-bold text-[#0B2545] sm:text-4xl">
+                  Visit Our Spot
+                </h2>
+                <div className="mx-auto mt-5 h-[3px] w-14 rounded-full bg-gradient-to-r from-[#A3E635] to-[#4d7c0f]" />
+              </div>
+
+              <div className="overflow-hidden rounded-3xl border border-[#0B2545]/10 shadow-2xl shadow-[#0B2545]/15">
+                <iframe
+                  title="Lena Wellness & Spa location"
+                  src={mapSrc}
+                  className="block h-[22rem] w-full border-0 sm:h-[30rem]"
+                  allowFullScreen
+                  loading="lazy"
+                  referrerPolicy="no-referrer-when-downgrade"
+                />
+              </div>
+            </Reveal>
+          </div>
         </section>
       )}
     </main>

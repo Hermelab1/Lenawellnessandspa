@@ -1,4 +1,5 @@
-const { pullMembers, resetCursor } = require("../services/syncservice");
+const syncService = require("../services/syncService");
+const { pullMembers, resetCursor } = syncService;
 
 let MemberModel;
 let SyncState;
@@ -21,16 +22,24 @@ function bindModels(models) {
   }
 
   SyncState = models.SyncState;
+
+  // IMPORTANT: the service needs the models too, otherwise pullMembers()
+  // throws "syncService models not bound".
+  syncService.bindModels(models);
+
   console.log(`🔗 controller bound (member model: ${MemberModel.name})`);
 }
 
 exports.syncNow = async (req, res) => {
   try {
-    const result = await pullMembers();
-    res.json({ success: true, ...result });
+    const full = req.query.full === "1" || req.query.full === "true";
+    const result = await pullMembers({ full });
+    // success only if nothing failed; details are always returned
+    res.json({ success: result.failed === 0, ...result });
   } catch (err) {
     console.error("Sync failed:", err);
-    res.status(500).json({ success: false, message: err.message });
+    const status = /already running/i.test(err.message) ? 409 : 500;
+    res.status(status).json({ success: false, message: err.message });
   }
 };
 

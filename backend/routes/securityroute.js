@@ -1,42 +1,47 @@
+// routes/security.js
 const express = require("express");
 const router = express.Router();
 const ctrl = require("../controllers/securityconteroller");
 const { checkAuth, checkPermission } = require("../middleware/auth");
 
-// Apply auth to everything below
 router.use(checkAuth);
 
 /* ---------- Roles ---------- */
-/* ---------- Roles ---------- */
-router.get("/roles", ctrl.allrole); // <--- Removed checkPermission("roles", "read") temporarily
-router.post("/roles", ctrl.addrole);
-router.put("/roles/:id", checkPermission("roles", "update"), ctrl.updaterole);
+router.get("/allroles", ctrl.allrole);
+router.get("/activeroles", ctrl.getActiveRoles);
+router.post("/addrole", ctrl.addrole);
+router.put(
+  "/updaterole/:id",
+  checkPermission("Security", "Role", "Edit"), // ⬅ submodule used as context
+  ctrl.updaterole,
+);
 router.delete(
-  "/roles/:id",
-  checkPermission("roles", "delete"),
+  "/deleterole/:id",
+  checkPermission("Security", "Role", "Delete"),
   ctrl.deleterole,
 );
 
 /* ---------- Permissions ---------- */
-router.get("/permissions", ctrl.allpermissions); // <--- Removed checkPermission temporarily
-
-/* ---------- Role permissions ---------- */
-router.get(
-  "/roles/:roleId/permissions",
-  ctrl.getrolepermission, // <--- Removed checkPermission temporarily
-);
-
+router.get("/permissions", ctrl.allpermissions);
+router.get("/roles/:roleId/permissions", ctrl.getrolepermission);
 router.post("/roles/:roleId/permissions", ctrl.assignPermissionsToRole);
 
-/* ---------- Users (Bypassed checkPermission for troubleshooting) ---------- */
-router.get("/users", ctrl.allusers); // <--- Removed checkPermission("users", "read") temporarily
+/* ---------- Users ---------- */
+router.get("/users", ctrl.allusers);
 router.post("/users", ctrl.adduser);
-router.put("/users/:id", checkPermission("users", "update"), ctrl.updateuser);
+router.put(
+  "/users/:id",
+  checkPermission("Security", "User", "Edit"),
+  ctrl.updateuser,
+);
 router.delete(
   "/users/:id",
-  checkPermission("users", "delete"),
+  checkPermission("Security", "User", "Delete"),
   ctrl.deleteuser,
 );
 router.get("/users/:userId/roles", ctrl.getuserrole);
+
+router.get("/userreport", ctrl.userreport);
+router.get("/rolereports", ctrl.rolereports);
 
 module.exports = router;

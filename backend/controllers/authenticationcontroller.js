@@ -3,6 +3,13 @@ const bcrypt = require("bcrypt");
 const { Op } = require("sequelize");
 const db = require("../models");
 
+const BCRYPT_REGEX = /^\$2[aby]\$\d{2}\$/;
+const DEBUG_AUTH = process.env.DEBUG_AUTH === "true";
+
+function signToken(userId) {
+  return jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: "1d" });
+}
+
 /* ============================================================
    REGISTER (public)
    ============================================================ */
@@ -18,7 +25,11 @@ async function register(req, res) {
 
   const t = await sequelize.transaction();
   try {
-    const { logincode, userfullname, email, password, roleIds } = req.body;
+    const { userfullname, password, roleIds } = req.body;
+    const logincode = String(req.body.logincode || "").trim();
+    const email = String(req.body.email || "")
+      .trim()
+      .toLowerCase();
 
     if (!logincode || !email || !password) {
       await t.rollback();
@@ -28,18 +39,21 @@ async function register(req, res) {
       });
     }
 
-    // Duplicate check
+    // Duplicate check (email or logincode)
     const existing = await SecUser.findOne({
-      where: { email },
+      where: { [Op.or]: [{ email }, { logincode }] },
       transaction: t,
     });
     if (existing) {
       await t.rollback();
-      return res
-        .status(409)
-        .json({ success: false, message: "Email already registered" });
+      return res.status(409).json({
+        success: false,
+        message: "Email or login code already registered",
+      });
     }
 
+    // Hash ONCE here. Make sure the SecUser model has NO beforeCreate /
+    // beforeUpdate hook that hashes the password again.
     const hashed = await bcrypt.hash(password, 10);
 
     const user = await SecUser.create(
@@ -52,13 +66,10 @@ async function register(req, res) {
       { transaction: t },
     );
 
-    /* ---------------------------------------------------------
-       ROLE ASSIGNMENT — safe
-       --------------------------------------------------------- */
+    /* ---------------- ROLE ASSIGNMENT ---------------- */
     let rolesToAssign = [];
 
     if (Array.isArray(roleIds) && roleIds.length > 0 && SecRole) {
-      // Validate passed role ids exist
       const found = await SecRole.findAll({
         where: { id: { [Op.in]: roleIds } },
         attributes: ["id"],
@@ -68,7 +79,6 @@ async function register(req, res) {
     }
 
     if (rolesToAssign.length === 0 && SecRole) {
-      // Fallback: default "User" role
       const defaultRole =
         (await SecRole.findOne({
           where: { RoleName: "User" },
@@ -85,20 +95,16 @@ async function register(req, res) {
       await Secusermember.bulkCreate(rows, { transaction: t });
     } else {
       console.warn(
-        `⚠️ Register: no role assigned to user ${user.id} (no roles in secrole)`,
+        `Register: no role assigned to user ${user.id} (no roles in secrole)`,
       );
     }
 
     await t.commit();
 
-    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
-      expiresIn: "1d",
-    });
-
     return res.status(201).json({
       success: true,
       message: "Registered successfully",
-      token,
+      token: signToken(user.id),
       user: {
         id: user.id,
         logincode: user.logincode,
@@ -126,8 +132,11 @@ async function login(req, res) {
   }
 
   try {
-    const { identifier, email, password } = req.body;
-    const loginId = identifier || email;
+    const { identifier, email, logincode, username } = req.body;
+    const password = req.body.password;
+    const loginId = String(
+      identifier || email || logincode || username || "",
+    ).trim();
 
     if (!loginId || !password) {
       return res
@@ -135,30 +144,63 @@ async function login(req, res) {
         .json({ success: false, message: "Credentials required" });
     }
 
+    if (DEBUG_AUTH)
+      console.log("LOGIN BODY:", { loginId, hasPassword: !!password });
+
     const user = await SecUser.findOne({
-      where: { [Op.or]: [{ email: loginId }, { logincode: loginId }] },
+      where: {
+        [Op.or]: [
+          { email: loginId },
+          { email: loginId.toLowerCase() },
+          { logincode: loginId },
+        ],
+      },
     });
 
     if (!user) {
+      if (DEBUG_AUTH) console.warn("LOGIN: user not found for", loginId);
       return res
         .status(401)
         .json({ success: false, message: "Invalid credentials" });
     }
 
-    const ok = await bcrypt.compare(password, user.password);
+    // Read the password safely (works with Sequelize instances)
+    const stored = user.get("password") || "";
+
+    if (DEBUG_AUTH) {
+      console.log("LOGIN: user found, id =", user.id);
+      console.log(
+        "LOGIN: stored looks like bcrypt:",
+        BCRYPT_REGEX.test(stored),
+      );
+      console.log("LOGIN: stored length:", stored.length);
+    }
+
+    let ok = false;
+
+    if (BCRYPT_REGEX.test(stored)) {
+      ok = await bcrypt.compare(password, stored);
+    } else if (stored && stored === password) {
+      // Legacy plain-text password: accept once, then upgrade to a bcrypt hash.
+      // Uses a raw update so model hooks can't hash it a second time.
+      ok = true;
+      const newHash = await bcrypt.hash(password, 10);
+      await SecUser.update(
+        { password: newHash },
+        { where: { id: user.id }, hooks: false },
+      );
+    }
+
     if (!ok) {
+      if (DEBUG_AUTH) console.warn("LOGIN: password mismatch for", loginId);
       return res
         .status(401)
         .json({ success: false, message: "Invalid credentials" });
     }
-
-    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
-      expiresIn: "1d",
-    });
 
     return res.status(200).json({
       success: true,
-      token,
+      token: signToken(user.id),
       user: { id: user.id, logincode: user.logincode, email: user.email },
     });
   } catch (error) {

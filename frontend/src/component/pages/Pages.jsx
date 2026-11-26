@@ -2,6 +2,7 @@ import React, { useRef } from 'react'
 import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom'
 import { TransitionGroup, CSSTransition } from 'react-transition-group'
 import Navbars from '../Navigation/navbar'
+import ScrollToTop from '../Navigation/Scrolltotop' // ✏️ adjust the path to where you save ScrollToTop.jsx
 import Home from '../Home/home'
 import About from '../About/about'
 import Gym from '../Service/gym'
@@ -34,7 +35,7 @@ const AnimatedRoutes = () => {
             <Route path="/aboutus" element={<About />} />
             <Route path="/ourpackages" element={<Ourpackages />} />
 
-            {/* Health tips + detail  👇 */}
+            {/* Health tips + detail */}
             <Route path="/healthtips" element={<HealthTips />} />
             <Route path="/healthtips/:id" element={<HealthTipsDetail />} />
 
@@ -55,6 +56,8 @@ const AnimatedRoutes = () => {
 
 const AppWithRouter = () => (
   <Router>
+    {/* Scrolls to the top (or to the #section) on every page change */}
+    <ScrollToTop />
     <Navbars />
     <AnimatedRoutes />
   </Router>

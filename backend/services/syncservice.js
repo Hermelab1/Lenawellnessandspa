@@ -6,8 +6,10 @@ let MembershipType; // MembershipType
 let ServiceType; // ServiceType
 let SyncState;
 let BOUND = false;
+let RUNNING = false;
 
 const SYNC_KEY = "RsMember_last_id";
+const BATCH_SIZE = Number(process.env.SYNC_BATCH_SIZE) || 500;
 
 /* ========================================================================== */
 /*                              MODEL BINDING                                 */
@@ -100,16 +102,17 @@ function safeDateOnly(v) {
 /* ========================================================================== */
 
 /**
- * Returns a Set of column names for a given table (returns empty Set if the
- * table does not exist).
+ * Returns a Set of column names for a dbo table (empty Set if the table does
+ * not exist or cannot be read).
  */
 async function getTableColumns(pool, tableName) {
   try {
     const res = await pool.request().input("t", sql.NVarChar, tableName).query(`
         SELECT c.name AS ColumnName
         FROM sys.columns c
-        JOIN sys.tables t ON t.object_id = c.object_id
-        WHERE t.name = @t
+        JOIN sys.tables  t ON t.object_id = c.object_id
+        JOIN sys.schemas s ON s.schema_id = t.schema_id
+        WHERE t.name = @t AND s.name = 'dbo'
       `);
     return new Set(res.recordset.map((r) => r.ColumnName));
   } catch (err) {
@@ -118,93 +121,264 @@ async function getTableColumns(pool, tableName) {
   }
 }
 
-/**
- * Builds a "tableAlias.column AS alias_column" fragment, omitting columns that
- * don't exist in the target table.
- */
+/** "alias.[col] AS asName" fragments, skipping columns the table doesn't have */
 function buildCols(alias, cols, wanted) {
   return wanted
     .filter(([col]) => cols.has(col))
-    .map(([col, asName]) => `${alias}.${col} AS ${asName}`)
+    .map(([col, asName]) => `${alias}.[${col}] AS ${asName}`)
     .join(",\n        ");
 }
 
 /* ========================================================================== */
-/*                                 PULL                                       */
+/*                         1) REFERENCE TABLES                                */
 /* ========================================================================== */
 
-async function pullMembers() {
-  ensureBound();
+/**
+ * RsMembershipType / RsServiceType are small lookup tables, so they are synced
+ * in full on every run (no JOIN needed, no row multiplication).
+ */
+async function syncReferenceTable(pool, tableName, model, label) {
+  if (!model) return 0;
 
-  const pool = await getMssqlPool();
-  const lastId = await getLastId();
+  const cols = await getTableColumns(pool, tableName);
+  if (!cols.has("Id")) return 0;
 
-  // ---- introspect schema once ----
-  const [memberCols, msCols, memsCols, mtCols, mtdCols, stCols] =
-    await Promise.all([
-      getTableColumns(pool, "RsMember"),
-      getTableColumns(pool, "RsMembership"),
-      getTableColumns(pool, "RsMemberService"),
-      getTableColumns(pool, "RsMembershipType"),
-      getTableColumns(pool, "RsMembershipTypeDetail"),
-      getTableColumns(pool, "RsServiceType"),
-    ]);
-
-  const hasMembership = msCols.size > 0;
-  const hasMemberService = memsCols.size > 0;
-  const hasMembershipType = mtCols.size > 0;
-  const hasMembershipTypeDetail = mtdCols.size > 0;
-  const hasServiceType = stCols.size > 0;
-
-  console.log(
-    `🧭 Schema: RsMembership=${hasMembership}, RsMemberService=${hasMemberService}, ` +
-      `RsMembershipType=${hasMembershipType}, RsMembershipTypeDetail=${hasMembershipTypeDetail}, ` +
-      `RsServiceType=${hasServiceType}`,
+  const fields = ["Id", "Name", "Description", "IsActive"].filter((c) =>
+    cols.has(c),
   );
+  const result = await pool
+    .request()
+    .query(
+      `SELECT ${fields.map((c) => `[${c}]`).join(", ")} FROM dbo.${tableName}`,
+    );
 
-  // ---- build SELECT dynamically ----
-  const memberSelect = buildCols("m", memberCols, [
-    ["Id", "Id"],
-    ["Name", "Name"],
-    ["Gender", "Gender"],
-    ["Nationality", "Nationality"],
-    ["TIN", "TIN"],
-    ["IDNo", "IDNo"],
-    ["IdentificationType", "IdentificationType"],
-    ["Profession", "Profession"],
-    ["Mobile", "Mobile"],
-    ["HomeTelephone", "HomeTelephone"],
-    ["WorkTelephone", "WorkTelephone"],
-    ["Fax", "Fax"],
-    ["POBox", "POBox"],
-    ["Email", "Email"],
-    ["AddressStreet1", "AddressStreet1"],
-    ["AddressStreet2", "AddressStreet2"],
-    ["Country", "Country"],
-    ["Region", "Region"],
-    ["City", "City"],
-    ["Subcity", "Subcity"],
-    ["Woreda", "Woreda"],
-    ["DateOfBirth", "DateOfBirth"],
-    ["Picture", "Picture"],
-    ["QRCode", "QRCode"],
-    ["Signature", "Signature"],
+  let count = 0;
+  for (const r of result.recordset) {
+    try {
+      const row = { Id: r.Id };
+      if (cols.has("Name")) row.Name = nz(r.Name);
+      if (cols.has("Description")) row.Description = nz(r.Description);
+      if (cols.has("IsActive")) row.IsActive = r.IsActive ?? null;
+      await model.upsert(row);
+      count++;
+    } catch (e) {
+      console.warn(`⚠️ ${label} ${r.Id}: ${e.message}`);
+    }
+  }
+  return count;
+}
+
+/* ========================================================================== */
+/*                              2) MEMBERS                                    */
+/* ========================================================================== */
+
+const MEMBER_FIELDS = [
+  "Name",
+  "Gender",
+  "Nationality",
+  "TIN",
+  "IDNo",
+  "IdentificationType",
+  "Profession",
+  "Mobile",
+  "HomeTelephone",
+  "WorkTelephone",
+  "Fax",
+  "POBox",
+  "Email",
+  "AddressStreet1",
+  "AddressStreet2",
+  "Country",
+  "Region",
+  "City",
+  "Subcity",
+  "Woreda",
+  "DateOfBirth",
+  "Picture",
+  "QRCode",
+  "Signature",
+];
+const BLOB_FIELDS = new Set(["Picture", "QRCode", "Signature"]);
+
+function mapMember(r, fields) {
+  const data = { external_id: r.Id, synced_at: new Date() };
+  for (const f of fields) {
+    if (BLOB_FIELDS.has(f)) data[f] = toBufferOrNull(r[f]);
+    else if (f === "DateOfBirth") data[f] = safeDate(r[f]);
+    else if (f === "Gender") data[f] = r[f] ?? null;
+    else data[f] = nz(r[f]);
+  }
+  return data;
+}
+
+async function upsertMember(r, fields) {
+  const data = mapMember(r, fields);
+  const existing = await MemberModel.findOne({
+    where: { external_id: r.Id },
+  });
+  if (existing) await existing.update(data);
+  else await MemberModel.create(data);
+}
+
+/**
+ * Pulls members with Id > startId in batches (no JOINs, so the Picture / QRCode
+ * / Signature blobs are transferred exactly once per member).
+ *
+ * The persisted cursor (safeLastId) only advances up to the first failure, so
+ * a member that failed is retried on the next run instead of being skipped.
+ */
+async function pullMemberRows(pool, memberCols, startId) {
+  const fields = MEMBER_FIELDS.filter((f) => memberCols.has(f));
+  const select = ["m.[Id]", ...fields.map((f) => `m.[${f}]`)].join(", ");
+
+  let fetchCursor = startId;
+  let safeLastId = startId;
+  let blocked = false;
+  let fetched = 0;
+  let upserted = 0;
+  let failed = 0;
+
+  while (true) {
+    const result = await pool
+      .request()
+      .input("lastId", sql.Int, fetchCursor)
+      .input("batch", sql.Int, BATCH_SIZE).query(`
+        SELECT TOP (@batch) ${select}
+        FROM dbo.RsMember AS m
+        WHERE m.Id > @lastId
+        ORDER BY m.Id ASC
+      `);
+
+    const rows = result.recordset;
+    if (rows.length === 0) break;
+    fetched += rows.length;
+
+    for (const r of rows) {
+      try {
+        await upsertMember(r, fields);
+        upserted++;
+        if (!blocked) safeLastId = r.Id;
+      } catch (e) {
+        failed++;
+        blocked = true;
+        console.error(`⚠️ Failed to upsert RsMember.Id=${r.Id}: ${e.message}`);
+      }
+      fetchCursor = r.Id;
+    }
+
+    if (rows.length < BATCH_SIZE) break;
+  }
+
+  return { fetched, upserted, failed, safeLastId };
+}
+
+/* ========================================================================== */
+/*                            3) MEMBERSHIPS                                  */
+/* ========================================================================== */
+
+/**
+ * MembershipDetail.MemberId has a foreign key to memberinformation.external_id,
+ * so every member referenced by a membership must exist in MySQL first.
+ * Missing members are back-filled from SQL Server; ids that do not exist in
+ * RsMember at all are orphans (reported and skipped).
+ */
+async function ensureMembersExist(pool, memberCols, memberIds) {
+  const ids = [...new Set(memberIds)]
+    .map(Number)
+    .filter((n) => Number.isInteger(n));
+
+  const present = new Set();
+  const CHUNK = 500;
+
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const rows = await MemberModel.findAll({
+      attributes: ["external_id"],
+      where: { external_id: ids.slice(i, i + CHUNK) },
+      raw: true,
+    });
+    for (const r of rows) present.add(Number(r.external_id));
+  }
+
+  const missing = ids.filter((id) => !present.has(id));
+  let backfilled = 0;
+
+  if (missing.length > 0) {
+    console.log(
+      `🩹 ${missing.length} member(s) referenced by memberships are missing in MySQL - back-filling`,
+    );
+    const fields = MEMBER_FIELDS.filter((f) => memberCols.has(f));
+    const select = ["m.[Id]", ...fields.map((f) => `m.[${f}]`)].join(", ");
+
+    for (let i = 0; i < missing.length; i += CHUNK) {
+      // ids are validated integers, safe to inline
+      const list = missing.slice(i, i + CHUNK).join(",");
+      const result = await pool
+        .request()
+        .query(
+          `SELECT ${select} FROM dbo.RsMember AS m WHERE m.Id IN (${list})`,
+        );
+
+      for (const r of result.recordset) {
+        try {
+          await upsertMember(r, fields);
+          present.add(Number(r.Id));
+          backfilled++;
+        } catch (e) {
+          console.error(`⚠️ Back-fill RsMember.Id=${r.Id}: ${e.message}`);
+        }
+      }
+    }
+  }
+
+  const orphans = ids.filter((id) => !present.has(id));
+  if (orphans.length > 0) {
+    console.warn(
+      `⚠️ ${orphans.length} membership member id(s) not found in RsMember ` +
+        `(first few: ${orphans.slice(0, 10).join(", ")})`,
+    );
+  }
+
+  return { present, backfilled, orphans: orphans.length };
+}
+
+/**
+ * Memberships are re-synced for ALL members on every run, so renewals,
+ * freezes and new services of existing members are picked up too.
+ */
+async function pullMembershipRows(pool, memberCols) {
+  const stats = {
+    fetched: 0,
+    upserted: 0,
+    skipped: 0,
+    failed: 0,
+    backfilledMembers: 0,
+    orphanMembers: 0,
+    orphanRows: 0,
+  };
+  if (!MembershipDetail) return stats;
+
+  const [msCols, memsCols] = await Promise.all([
+    getTableColumns(pool, "RsMembership"),
+    getTableColumns(pool, "RsMemberService"),
   ]);
 
-  const msSelect = hasMembership
-    ? buildCols("ms", msCols, [
-        ["Id", "ms_Id"],
-        ["MembershipNo", "ms_MembershipNo"],
-        ["MemberId", "ms_MemberId"],
-        ["RegistryDate", "ms_RegistryDate"],
-        ["ExpiryDate", "ms_ExpiryDate"],
-      ])
-    : "";
+  if (!msCols.has("Id") || !msCols.has("MemberId")) {
+    console.warn("⚠️ RsMembership missing or has no Id/MemberId - skipping");
+    return stats;
+  }
+  const hasMems = memsCols.has("MembershipId");
 
-  const memsSelect = hasMemberService
+  const msSelect = buildCols("ms", msCols, [
+    ["Id", "ms_Id"],
+    ["MembershipNo", "ms_MembershipNo"],
+    ["MemberId", "ms_MemberId"],
+    ["MembershipTypeId", "ms_MembershipTypeId"],
+    ["RegistryDate", "ms_RegistryDate"],
+    ["ExpiryDate", "ms_ExpiryDate"],
+  ]);
+  const memsSelect = hasMems
     ? buildCols("mems", memsCols, [
         ["Id", "mems_Id"],
-        ["MembershipId", "mems_MembershipId"],
         ["MembershipTypeId", "mems_MembershipTypeId"],
         ["ServiceTypeId", "mems_ServiceTypeId"],
         ["RegistryDate", "mems_RegistryDate"],
@@ -215,274 +389,157 @@ async function pullMembers() {
       ])
     : "";
 
-  const mtSelect = hasMembershipType
-    ? buildCols("mt", mtCols, [
-        ["Id", "mt_Id"],
-        ["Name", "mt_Name"],
-        ["Description", "mt_Description"],
-        ["IsActive", "mt_IsActive"],
-      ])
-    : "";
-
-  const mtdSelect = hasMembershipTypeDetail
-    ? buildCols("mtd", mtdCols, [
-        ["Id", "mtd_Id"],
-        ["MembershipTypeId", "mtd_MembershipTypeId"],
-        ["ServiceTypeId", "mtd_ServiceTypeId"],
-      ])
-    : "";
-
-  const stSelect = hasServiceType
-    ? buildCols("st", stCols, [
-        ["Id", "st_Id"],
-        ["Name", "st_Name"],
-        ["Description", "st_Description"],
-        ["IsActive", "st_IsActive"],
-      ])
-    : "";
-
-  // join only what exists
-  const joins = [];
-  if (hasMembership)
-    joins.push("LEFT JOIN RsMembership AS ms ON m.Id = ms.MemberId");
-  if (hasMembership && hasMemberService)
-    joins.push(
-      "LEFT JOIN RsMemberService AS mems ON ms.Id = mems.MembershipId",
-    );
-  if (
-    (hasMembershipType &&
-      hasMemberService &&
-      memsCols.has("MembershipTypeId")) ||
-    (hasMembershipType && hasMembershipTypeDetail)
-  ) {
-    const mtJoinSource = memsCols.has("MembershipTypeId")
-      ? "mems.MembershipTypeId"
-      : "mtd.MembershipTypeId";
-    if (hasMemberService && memsCols.has("MembershipTypeId"))
-      joins.push(`LEFT JOIN RsMembershipType AS mt ON ${mtJoinSource} = mt.Id`);
-    else if (hasMembershipTypeDetail)
-      joins.push(`LEFT JOIN RsMembershipType AS mt ON ${mtJoinSource} = mt.Id`);
-  }
-  if (hasMembershipType && hasMembershipTypeDetail)
-    joins.push(
-      "LEFT JOIN RsMembershipTypeDetail AS mtd ON mt.Id = mtd.MembershipTypeId",
-    );
-  if (hasMembershipTypeDetail && hasServiceType)
-    joins.push("LEFT JOIN RsServiceType AS st ON mtd.ServiceTypeId = st.Id");
-
-  const selectParts = [
-    memberSelect,
-    msSelect,
-    memsSelect,
-    mtSelect,
-    mtdSelect,
-    stSelect,
-  ]
-    .filter(Boolean)
-    .join(",\n        ");
-
   const query = `
-    SELECT
-        ${selectParts}
-    FROM dbo.RsMember AS m
-    ${joins.join("\n    ")}
-    WHERE m.Id > @lastId
-    ORDER BY m.Id ASC
+    SELECT ${[msSelect, memsSelect].filter(Boolean).join(",\n        ")}
+    FROM dbo.RsMembership AS ms
+    ${hasMems ? "LEFT JOIN dbo.RsMemberService AS mems ON ms.Id = mems.MembershipId" : ""}
+    ORDER BY ms.Id ASC
   `;
 
   if (process.env.DEBUG_SYNC_SQL === "1") {
-    console.log("🔎 SQL:\n" + query);
+    console.log("🔎 Membership SQL:\n" + query);
   }
 
-  const result = await pool
-    .request()
-    .input("lastId", sql.Int, lastId)
-    .query(query);
+  const result = await pool.request().query(query);
+  stats.fetched = result.recordset.length;
 
-  const rows = result.recordset;
-  if (rows.length === 0) return { pulled: 0, lastId };
+  // make sure every referenced member exists in MySQL (foreign key)
+  const ensured = await ensureMembersExist(
+    pool,
+    memberCols,
+    result.recordset.map((r) => r.ms_MemberId).filter((v) => v != null),
+  );
+  stats.backfilledMembers = ensured.backfilled;
+  stats.orphanMembers = ensured.orphans;
 
-  console.log(`📥 Fetched ${rows.length} row(s) from SQL Server`);
+  for (const r of result.recordset) {
+    try {
+      const registry = safeDateOnly(r.mems_RegistryDate ?? r.ms_RegistryDate);
+      if (r.ms_MemberId == null || registry == null) {
+        stats.skipped++;
+        continue;
+      }
+      if (!ensured.present.has(Number(r.ms_MemberId))) {
+        stats.orphanRows++;
+        continue;
+      }
 
-  /* --------------- group rows by member --------------- */
-  const grouped = new Map();
+      const typeId = r.mems_MembershipTypeId ?? r.ms_MembershipTypeId ?? null;
+      const serviceId = r.mems_ServiceTypeId ?? null;
 
-  for (const r of rows) {
-    if (!grouped.has(r.Id)) {
-      grouped.set(r.Id, {
-        member: {
-          external_id: r.Id,
-          Name: nz(r.Name),
-          Gender: r.Gender ?? null,
-          Nationality: nz(r.Nationality),
-          TIN: nz(r.TIN),
-          IDNo: nz(r.IDNo),
-          IdentificationType: nz(r.IdentificationType),
-          Profession: nz(r.Profession),
-          Mobile: nz(r.Mobile),
-          HomeTelephone: nz(r.HomeTelephone),
-          WorkTelephone: nz(r.WorkTelephone),
-          Fax: nz(r.Fax),
-          POBox: nz(r.POBox),
-          Email: nz(r.Email),
-          AddressStreet1: nz(r.AddressStreet1),
-          AddressStreet2: nz(r.AddressStreet2),
-          Country: nz(r.Country),
-          Region: nz(r.Region),
-          City: nz(r.City),
-          Subcity: nz(r.Subcity),
-          Woreda: nz(r.Woreda),
-          DateOfBirth: safeDate(r.DateOfBirth),
-          Picture: toBufferOrNull(r.Picture),
-          QRCode: toBufferOrNull(r.QRCode),
-          Signature: toBufferOrNull(r.Signature),
-          synced_at: new Date(),
-        },
-        memberships: new Map(), // key = mems_Id (or ms_Id if no mems)
-        serviceTypes: new Map(), // key = st_Id
-        membershipTypes: new Map(), // key = mt_Id
-      });
-    }
+      const where = {
+        MemberId: r.ms_MemberId,
+        RegistryDate: registry,
+        MembershipTypeId: typeId,
+        ServiceTypeId: serviceId,
+      };
 
-    const g = grouped.get(r.Id);
-
-    // reference: ServiceType
-    if (r.st_Id != null) {
-      g.serviceTypes.set(r.st_Id, {
-        Id: r.st_Id,
-        Name: nz(r.st_Name),
-        Description: nz(r.st_Description),
-        IsActive: r.st_IsActive ?? null,
-      });
-    }
-
-    // reference: MembershipType
-    if (r.mt_Id != null) {
-      g.membershipTypes.set(r.mt_Id, {
-        Id: r.mt_Id,
-        Name: nz(r.mt_Name),
-        Description: nz(r.mt_Description),
-        IsActive: r.mt_IsActive ?? null,
-      });
-    }
-
-    // membership detail row — prefer RsMemberService.Id, else RsMembership.Id
-    const detailId =
-      r.mems_Id != null
-        ? `mems_${r.mems_Id}`
-        : r.ms_Id != null
-          ? `ms_${r.ms_Id}`
-          : null;
-    if (detailId && !g.memberships.has(detailId)) {
-      const serviceTypeId =
-        r.mems_ServiceTypeId != null
-          ? r.mems_ServiceTypeId
-          : (r.mtd_ServiceTypeId ?? null);
-
-      g.memberships.set(detailId, {
+      const syncedFields = {
         MembershipNo: nz(r.ms_MembershipNo),
-        MemberId: r.ms_MemberId ?? r.Id,
-        MembershipTypeId:
-          r.mems_MembershipTypeId ?? r.mtd_MembershipTypeId ?? null,
-        ServiceTypeId: serviceTypeId,
-        RegistryDate: safeDateOnly(r.mems_RegistryDate ?? r.ms_RegistryDate),
+        MemberId: r.ms_MemberId,
+        MembershipTypeId: typeId,
+        ServiceTypeId: serviceId,
+        RegistryDate: registry,
         ExpiryDate: safeDateOnly(r.mems_ExpiryDate ?? r.ms_ExpiryDate),
         freezDate: safeDateOnly(r.mems_FreezeDate),
         unfreezDate: safeDateOnly(r.mems_UnfreezeDate),
         freezeCount: r.mems_FreezeCount ?? null,
         isFreeze: r.mems_FreezeDate != null && r.mems_UnfreezeDate == null,
-        isActive: true,
-        Status: 0,
-      });
-    }
-  }
+      };
 
-  /* --------------- upsert --------------- */
-  let maxId = lastId;
-  let processedMembers = 0;
-  let processedMemberships = 0;
-
-  for (const [memberId, group] of grouped) {
-    try {
-      // reference: MembershipType
-      if (MembershipType) {
-        for (const mt of group.membershipTypes.values()) {
-          try {
-            const existing = await MembershipType.findByPk(mt.Id);
-            if (existing) await existing.update(mt);
-            else await MembershipType.create(mt);
-          } catch (e) {
-            console.warn(`⚠️ MembershipType ${mt.Id}: ${e.message}`);
-          }
-        }
+      const existing = await MembershipDetail.findOne({ where });
+      if (existing) {
+        // do NOT overwrite isActive / Status - the app may have changed them
+        await existing.update(syncedFields);
+      } else {
+        await MembershipDetail.create({
+          ...syncedFields,
+          isActive: true,
+          Status: 0,
+        });
       }
-
-      // reference: ServiceType
-      if (ServiceType) {
-        for (const st of group.serviceTypes.values()) {
-          try {
-            const existing = await ServiceType.findByPk(st.Id);
-            if (existing) await existing.update(st);
-            else await ServiceType.create(st);
-          } catch (e) {
-            console.warn(`⚠️ ServiceType ${st.Id}: ${e.message}`);
-          }
-        }
-      }
-
-      // member
-      let memberRow = await MemberModel.findOne({
-        where: { external_id: memberId },
-      });
-      if (memberRow) await memberRow.update(group.member);
-      else memberRow = await MemberModel.create(group.member);
-
-      // memberships
-      if (MembershipDetail) {
-        for (const detail of group.memberships.values()) {
-          // Skip if we have nothing meaningful to match on
-          if (detail.MemberId == null || detail.RegistryDate == null) {
-            continue;
-          }
-
-          const where = {
-            MemberId: detail.MemberId,
-            RegistryDate: detail.RegistryDate,
-          };
-          if (detail.MembershipTypeId != null)
-            where.MembershipTypeId = detail.MembershipTypeId;
-          if (detail.ServiceTypeId != null)
-            where.ServiceTypeId = detail.ServiceTypeId;
-
-          const existing = await MembershipDetail.findOne({ where });
-          if (existing) await existing.update(detail);
-          else await MembershipDetail.create(detail);
-          processedMemberships++;
-        }
-      }
-
-      processedMembers++;
-      if (memberId > maxId) maxId = memberId;
-    } catch (rowErr) {
+      stats.upserted++;
+    } catch (e) {
+      stats.failed++;
       console.error(
-        `⚠️ Failed to upsert RsMember.Id=${memberId}:`,
-        rowErr.message,
+        `⚠️ Membership row (ms_Id=${r.ms_Id}, mems_Id=${r.mems_Id}): ${e.message}`,
       );
     }
   }
 
-  if (processedMembers > 0) await setLastId(maxId);
+  return stats;
+}
 
-  console.log(
-    `🔄 Pulled ${processedMembers}/${grouped.size} member(s), ` +
-      `${processedMemberships} membership detail row(s) (lastId → ${maxId})`,
-  );
+/* ========================================================================== */
+/*                                 PULL                                       */
+/* ========================================================================== */
 
-  return {
-    pulled: processedMembers,
-    memberships: processedMemberships,
-    lastId: maxId,
-  };
+/**
+ * @param {{ full?: boolean }} options  full=true re-reads every member from Id 0
+ *        (use it to refresh edited member data; the cursor never moves back).
+ */
+async function pullMembers({ full = false } = {}) {
+  ensureBound();
+
+  if (RUNNING) throw new Error("A sync is already running");
+  RUNNING = true;
+
+  try {
+    const pool = await getMssqlPool();
+    const storedLastId = await getLastId();
+    const startId = full ? 0 : storedLastId;
+
+    const memberCols = await getTableColumns(pool, "RsMember");
+    if (!memberCols.has("Id")) {
+      throw new Error("dbo.RsMember not found (or it has no Id column)");
+    }
+
+    // 1) lookup tables
+    const membershipTypes = await syncReferenceTable(
+      pool,
+      "RsMembershipType",
+      MembershipType,
+      "MembershipType",
+    );
+    const serviceTypes = await syncReferenceTable(
+      pool,
+      "RsServiceType",
+      ServiceType,
+      "ServiceType",
+    );
+
+    // 2) members
+    const members = await pullMemberRows(pool, memberCols, startId);
+    console.log(
+      `📥 Members: fetched ${members.fetched}, saved ${members.upserted}, failed ${members.failed}`,
+    );
+
+    // 3) memberships (all members)
+    const memberships = await pullMembershipRows(pool, memberCols);
+    console.log(
+      `📥 Memberships: fetched ${memberships.fetched}, saved ${memberships.upserted}, ` +
+        `skipped ${memberships.skipped}, orphan rows ${memberships.orphanRows}, ` +
+        `members back-filled ${memberships.backfilledMembers}, failed ${memberships.failed}`,
+    );
+
+    // 4) cursor (never moves backwards)
+    if (members.safeLastId > storedLastId) await setLastId(members.safeLastId);
+    const lastId = Math.max(storedLastId, members.safeLastId);
+
+    return {
+      pulled: members.upserted,
+      failed: members.failed,
+      memberships: memberships.upserted,
+      membershipsSkipped: memberships.skipped,
+      membershipsFailed: memberships.failed,
+      membersBackfilled: memberships.backfilledMembers,
+      orphanMembershipRows: memberships.orphanRows,
+      referenceData: { membershipTypes, serviceTypes },
+      lastId,
+    };
+  } finally {
+    RUNNING = false;
+  }
 }
 
 async function resetCursor() {

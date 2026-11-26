@@ -1,6 +1,5 @@
 import React, { useState } from 'react'
 import { Link } from 'react-router-dom'
-// import logo from '../../asset/img/logo.png' // ✏️ swap in your logo image if you have one
 
 // ✏️ Same paths as the Home page / navbar
 const LINKS = {
@@ -67,6 +66,63 @@ const SOCIALS = [
   },
 ]
 
+/* ---------- Logo (same as the Navbar logo) ---------- */
+const LOGO_GREEN = '#A6E22E'
+
+const Logo = () => (
+  <Link to={LINKS.home} aria-label="Lena Wellness - Home" className="inline-flex items-center no-underline">
+    <svg
+      className="h-16 w-auto shrink-0 sm:h-20"
+      viewBox="150 90 1180 620"
+      xmlns="http://www.w3.org/2000/svg"
+      role="img"
+      aria-hidden="true"
+    >
+      {/* Letters drawn as thick rounded strokes */}
+      <g
+        fill="none"
+        stroke={LOGO_GREEN}
+        strokeWidth="48"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        {/* L */}
+        <path d="M204 215 V500 H385" />
+
+        {/* e */}
+        <path d="M648 452 C612 492 560 508 515 497 C440 480 404 420 414 340 C424 262 480 215 540 215 C612 215 652 262 640 322 C628 382 540 418 440 397" />
+
+        {/* N */}
+        <path d="M728 500 V215 L949 498 V212" />
+
+        {/* A */}
+        <path d="M1048 500 V300 C1048 242 1090 212 1155 212 C1222 212 1262 246 1262 300 V500" />
+        <path d="M1078 408 C1100 372 1130 362 1160 362 C1200 362 1236 382 1262 408" />
+      </g>
+
+      {/* Thin swoosh crossing the e */}
+      <path
+        d="M565 110 C440 132 340 220 345 300 C348 352 382 388 432 398 C386 376 356 340 361 295 C367 220 452 140 565 110 Z"
+        fill={LOGO_GREEN}
+      />
+
+      {/* WELLNESS */}
+      <text
+        x="330"
+        y="680"
+        fill={LOGO_GREEN}
+        fontFamily="'Helvetica Neue', Arial, sans-serif"
+        fontSize="82"
+        fontWeight="400"
+        textLength="815"
+        lengthAdjust="spacing"
+      >
+        WELLNESS
+      </text>
+    </svg>
+  </Link>
+)
+
 const IconWrap = ({ children }) => (
   <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#A3E635]/15 text-[#A3E635]">
     {children}
@@ -102,15 +158,7 @@ const Footer = () => {
       <div className="relative mx-auto grid max-w-6xl gap-12 px-6 py-16 sm:grid-cols-2 lg:grid-cols-4">
         {/* Logo + short about + social */}
         <div>
-          <Link to={LINKS.home} className="inline-flex items-center gap-3" aria-label="Lena Wellness & Spa home">
-            {/* <img src={logo} alt="Lena Wellness & Spa" className="h-12 w-auto" /> */}
-            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-[#A3E635] font-serif text-2xl font-bold text-[#0B2545]">
-              L
-            </span>
-            <span className="font-serif text-xl font-bold leading-tight">
-              Lena <span className="text-[#A3E635]">Wellness &amp; Spa</span>
-            </span>
-          </Link>
+          <Logo />
 
           <p className="mt-5 max-w-sm leading-relaxed text-white/75">
             A calm place to relax, restore and renew. Our caring team offers treatments that leave you refreshed in

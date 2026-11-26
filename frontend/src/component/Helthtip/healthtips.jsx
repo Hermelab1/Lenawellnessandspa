@@ -3,32 +3,42 @@ import { Link } from 'react-router-dom'
 import { webApi } from '../Api/apilist'
 import Footer from '../Footer/footer'
 
-const TIPS_PAGE_ID = 6
+export const TIPS_PAGE_ID = 6
 
-/* ---------- Helpers ---------- */
-const sortById = (list = []) => list.filter((i) => !i.isDeleted).sort((a, b) => a.id - b.id)
-const clean = (s = '') => s.replace(/\s+/g, ' ').trim()
-const toLines = (text = '') =>
-  text
+/* ---------- Helpers (exported so TipDetail can reuse them) ---------- */
+export const sortById = (list = []) =>
+  list.filter((i) => !i.isDeleted).sort((a, b) => a.id - b.id)
+
+export const clean = (s = '') => (s || '').replace(/\s+/g, ' ').trim()
+
+export const toLines = (text = '') =>
+  (text || '')
     .split('\n')
     .map((l) => clean(l))
     .filter(Boolean)
 
-const parseTips = (contents) => {
+/* A line that does not end in punctuation starts a new tip (title);
+   lines that end in . ! ? are appended to the current tip's body.
+   Ids stay unique even when several tips live in one content item. */
+export const parseTips = (contents) => {
   const tips = []
   let cur = null
   contents.forEach((c) => {
+    let n = 0
     toLines(c.content).forEach((line) => {
       if (/[.!?]$/.test(line) && cur) {
         cur.body = clean(`${cur.body} ${line}`)
       } else {
-        cur = { id: c.id, title: line, body: '' }
+        cur = { id: n === 0 ? String(c.id) : `${c.id}-${n}`, title: line, body: '' }
+        n += 1
         tips.push(cur)
       }
     })
   })
   return tips.filter((t) => t.title && t.body)
 }
+
+const normalizeName = (section) => (section?.sectionName || '').trim().toLowerCase()
 
 /* ---------- Icons ---------- */
 const iconBase = {
@@ -109,6 +119,17 @@ const Reveal = ({ children, className = '', delay = 0, as: Tag = 'div' }) => {
   useEffect(() => {
     const node = ref.current
     if (!node) return undefined
+
+    const reduceMotion =
+      typeof window !== 'undefined' &&
+      window.matchMedia &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+    if (reduceMotion || typeof IntersectionObserver === 'undefined') {
+      setVisible(true)
+      return undefined
+    }
+
     const io = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
@@ -126,7 +147,7 @@ const Reveal = ({ children, className = '', delay = 0, as: Tag = 'div' }) => {
     <Tag
       ref={ref}
       style={{ transitionDelay: `${delay}ms` }}
-      className={`transform-gpu transition-all duration-700 ease-out ${
+      className={`transform-gpu transition-all duration-700 ease-out motion-reduce:transition-none ${
         visible ? 'translate-y-0 opacity-100' : 'translate-y-6 opacity-0'
       } ${className}`}
     >
@@ -136,45 +157,91 @@ const Reveal = ({ children, className = '', delay = 0, as: Tag = 'div' }) => {
 }
 
 /* ---------- Shared ---------- */
-const SectionTitle = ({ eyebrow, title, center = true, dark = false }) => (
+const SectionTitle = ({ eyebrow, title, subtitle, center = true, dark = false }) => (
   <div className={center ? 'text-center' : ''}>
     {eyebrow && (
       <span
-        className={`inline-block text-xs font-bold uppercase tracking-[0.3em] ${
+        className={`inline-flex items-center gap-3 text-[11px] font-bold uppercase tracking-[0.32em] ${
           dark ? 'text-[#A3E635]' : 'text-[#4d7c0f]'
         }`}
       >
+        <span className={`h-px w-8 ${dark ? 'bg-[#A3E635]/60' : 'bg-[#4d7c0f]/40'}`} />
         {eyebrow}
+        <span className={`h-px w-8 ${dark ? 'bg-[#A3E635]/60' : 'bg-[#4d7c0f]/40'}`} />
       </span>
     )}
     <h2
-      className={`mt-3 font-serif text-3xl font-bold sm:text-4xl ${
+      className={`mt-4 font-serif text-3xl font-bold leading-tight sm:text-4xl lg:text-[2.6rem] ${
         dark ? 'text-white' : 'text-[#0B2545]'
       }`}
     >
       {title}
     </h2>
-    <div className={`mt-4 h-1 w-16 rounded-full bg-[#A3E635] ${center ? 'mx-auto' : ''}`} />
+    <div
+      className={`mt-5 h-[3px] w-14 rounded-full bg-gradient-to-r from-[#A3E635] to-[#4d7c0f] ${
+        center ? 'mx-auto' : ''
+      }`}
+    />
+    {subtitle && (
+      <p
+        className={`mt-5 max-w-2xl text-base leading-relaxed ${
+          dark ? 'text-white/75' : 'text-[#0B2545]/70'
+        } ${center ? 'mx-auto' : ''}`}
+      >
+        {subtitle}
+      </p>
+    )}
   </div>
 )
 
+const ArrowRight = () => (
+  <svg
+    viewBox="0 0 24 24"
+    className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2.5"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M5 12h14M13 6l6 6-6 6" />
+  </svg>
+)
+
+const ChevronRight = () => (
+  <svg
+    viewBox="0 0 24 24"
+    className="h-3 w-3"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2.5"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="m9 6 6 6-6 6" />
+  </svg>
+)
+
 /* =====================================================
-   HERO
+   HERO (compact)
 ===================================================== */
 const HeroSection = ({ section }) => {
   const contents = sortById(section.contents)
   const title = contents[0] ? clean(contents[0].content) : 'Health Tips'
-  const subtitle =
-    contents[1] ? clean(contents[1].content) : 'Small, mindful habits. Big, lasting change.'
+  const subtitle = contents[1]
+    ? clean(contents[1].content)
+    : 'Small, mindful habits. Big, lasting change.'
 
   return (
-    <section className="relative overflow-hidden bg-[#0B2545] text-white">
-      <div className="pointer-events-none absolute -left-32 -top-32 h-96 w-96 rounded-full bg-[#A3E635]/15 blur-3xl" />
-      <div className="pointer-events-none absolute -bottom-40 -right-24 h-[28rem] w-[28rem] rounded-full bg-[#13315c]/70 blur-3xl" />
+    <section className="relative isolate overflow-hidden bg-[#0B2545] text-white h-[45vh]">
+      <div className="pointer-events-none absolute -left-32 -top-32 -z-10 h-80 w-80 rounded-full bg-[#A3E635]/15 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-40 -right-24 -z-10 h-96 w-96 rounded-full bg-[#13315c]/70 blur-3xl" />
 
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-0 opacity-[0.07]"
+        className="pointer-events-none absolute inset-0 -z-10 opacity-[0.06]"
         style={{
           backgroundImage:
             'linear-gradient(to right, #A3E635 1px, transparent 1px), linear-gradient(to bottom, #A3E635 1px, transparent 1px)',
@@ -182,41 +249,56 @@ const HeroSection = ({ section }) => {
         }}
       />
 
-      <div className="relative mx-auto flex max-w-5xl flex-col items-center px-6 py-24 text-center sm:py-32">
+      <div className="relative mx-auto flex max-w-4xl flex-col items-center px-6 py-14 text-center sm:py-16">
         <Reveal>
-          <span className="inline-flex items-center gap-2 rounded-full border border-[#A3E635]/40 bg-[#A3E635]/10 px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.3em] text-[#A3E635]">
-            <span className="h-1.5 w-1.5 rounded-full bg-[#A3E635]" />
-            Health Tips
-          </span>
+          <nav aria-label="Breadcrumb">
+            <ol className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.25em] text-white/70 backdrop-blur-md">
+              <li>
+                <Link to="/" className="transition-colors hover:text-[#A3E635]">
+                  Home
+                </Link>
+              </li>
+              <li aria-hidden="true" className="text-[#A3E635]">
+                <ChevronRight />
+              </li>
+              <li aria-current="page" className="text-[#A3E635]">
+                Health Tips
+              </li>
+            </ol>
+          </nav>
         </Reveal>
 
-        <Reveal delay={150}>
-          <h1 className="mt-6 max-w-4xl font-serif text-4xl font-bold leading-tight drop-shadow-[0_2px_12px_rgba(11,37,69,0.7)] sm:text-5xl lg:text-6xl">
+        <Reveal delay={120}>
+          <h1 className="mt-5 max-w-3xl font-serif text-2xl font-bold leading-[1.2] tracking-tight drop-shadow-lg sm:text-3xl lg:text-4xl">
             {title}
           </h1>
         </Reveal>
 
-        <Reveal delay={300}>
-          <p className="mt-6 max-w-2xl text-lg leading-relaxed text-white/80">{subtitle}</p>
+        <Reveal delay={240}>
+          <p className="mt-3 max-w-xl text-sm font-light leading-relaxed text-white/85 sm:text-base">
+            {subtitle}
+          </p>
         </Reveal>
 
-        <Reveal delay={450}>
-          <div className="mt-8 h-1 w-20 rounded-full bg-[#A3E635]" />
+        <Reveal delay={360}>
+          <div className="mt-6 h-[3px] w-16 rounded-full bg-gradient-to-r from-[#A3E635] to-[#4d7c0f]" />
         </Reveal>
       </div>
+
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-[#A3E635]/50 to-transparent" />
     </section>
   )
 }
 
 /* =====================================================
-   TIP CARD — link to /healthtips/:id
+   TIP CARD — links to /healthtips/:id
 ===================================================== */
 const TipCard = ({ tip, index, featured = false }) => (
   <Link
     to={`/healthtips/${tip.id}`}
     state={{ tip }}
     aria-label={`Read more about ${tip.title}`}
-    className={`group relative flex h-full flex-col overflow-hidden rounded-3xl border border-[#0B2545]/10 bg-white outline-none transition duration-300 hover:-translate-y-1 hover:border-[#A3E635] hover:shadow-2xl hover:shadow-[#0B2545]/10 focus-visible:ring-2 focus-visible:ring-[#A3E635] focus-visible:ring-offset-2 ${
+    className={`group relative flex h-full flex-col overflow-hidden rounded-3xl border border-[#0B2545]/10 bg-white shadow-lg shadow-[#0B2545]/5 outline-none transition duration-300 hover:-translate-y-1.5 hover:border-[#A3E635] hover:shadow-2xl hover:shadow-[#0B2545]/10 focus-visible:ring-2 focus-visible:ring-[#A3E635] focus-visible:ring-offset-2 ${
       featured ? 'p-8 sm:p-10' : 'p-7'
     }`}
   >
@@ -224,7 +306,7 @@ const TipCard = ({ tip, index, featured = false }) => (
 
     <span
       aria-hidden="true"
-      className={`pointer-events-none absolute right-5 font-serif font-bold text-[#0B2545]/[0.045] ${
+      className={`pointer-events-none absolute right-5 font-serif font-bold text-[#0B2545]/[0.045] transition-colors duration-500 group-hover:text-[#A3E635]/20 ${
         featured ? '-top-4 text-8xl' : '-top-2 text-7xl'
       }`}
     >
@@ -232,16 +314,16 @@ const TipCard = ({ tip, index, featured = false }) => (
     </span>
 
     <div
-      className={`flex shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-[#0B2545] to-[#13315c] text-[#A3E635] shadow-lg shadow-[#0B2545]/20 transition group-hover:from-[#A3E635] group-hover:to-[#84cc16] group-hover:text-[#0B2545] ${
+      className={`relative flex shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-[#0B2545] to-[#13315c] text-[#A3E635] shadow-lg shadow-[#0B2545]/20 transition duration-300 group-hover:from-[#A3E635] group-hover:to-[#84cc16] group-hover:text-[#0B2545] ${
         featured ? 'h-16 w-16' : 'h-14 w-14'
       }`}
     >
       <div className={featured ? 'h-8 w-8' : 'h-7 w-7'}>{pickIcon(tip.title)}</div>
     </div>
 
-    <div className="mt-5 flex-1">
+    <div className="relative mt-5 flex-1">
       <p className="text-[11px] font-bold uppercase tracking-[0.25em] text-[#4d7c0f]">
-        Tip {String(index + 1).padStart(2, '0')}
+        {featured ? 'Featured · ' : ''}Tip {String(index + 1).padStart(2, '0')}
       </p>
       <h3
         className={`mt-2 font-serif font-bold leading-snug text-[#0B2545] ${
@@ -252,18 +334,16 @@ const TipCard = ({ tip, index, featured = false }) => (
       </h3>
       <p
         className={`mt-3 leading-relaxed text-[#0B2545]/70 ${
-          featured ? 'text-base' : 'text-[15px]'
+          featured ? 'text-base' : 'line-clamp-4 text-[15px]'
         }`}
       >
         {tip.body}
       </p>
     </div>
 
-    <div className="mt-6 flex items-center gap-2 text-sm font-bold text-[#4d7c0f]">
+    <div className="relative mt-6 flex items-center gap-2 text-sm font-bold text-[#4d7c0f]">
       <span>Read more</span>
-      <span aria-hidden="true" className="transition group-hover:translate-x-1">
-        →
-      </span>
+      <ArrowRight />
     </div>
   </Link>
 )
@@ -276,7 +356,15 @@ const TipsSection = ({ section }) => {
     <section className="bg-white py-20 sm:py-24">
       <div className="mx-auto max-w-6xl px-6">
         <Reveal>
-          <SectionTitle eyebrow="Live Well" title="Simple Habits For A Healthier You" />
+          <SectionTitle
+            eyebrow="Live Well"
+            title="Simple Habits For A Healthier You"
+            subtitle={
+              tips.length > 0
+                ? `${tips.length} practical ${tips.length === 1 ? 'tip' : 'tips'} to help you feel your best, every day.`
+                : undefined
+            }
+          />
         </Reveal>
 
         {tips.length > 0 ? (
@@ -286,7 +374,7 @@ const TipsSection = ({ section }) => {
                 <div className="grid gap-6 lg:grid-cols-2">
                   <TipCard tip={featured} index={0} featured />
                   {rest.length === 0 && (
-                    <div className="hidden rounded-3xl bg-gradient-to-br from-[#0B2545] to-[#13315c] p-8 text-white lg:flex lg:flex-col lg:justify-center lg:p-10">
+                    <div className="hidden rounded-3xl bg-gradient-to-br from-[#0B2545] to-[#13315c] p-8 text-white shadow-2xl shadow-[#0B2545]/20 lg:flex lg:flex-col lg:justify-center lg:p-10">
                       <h3 className="font-serif text-2xl font-bold text-[#A3E635]">
                         Start with one habit today
                       </h3>
@@ -303,8 +391,8 @@ const TipsSection = ({ section }) => {
             {rest.length > 0 && (
               <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
                 {rest.map((tip, i) => (
-                  <Reveal key={`${tip.id}-${i}`} delay={i * 80}>
-                    <TipCard tip={tip} index={i + (featured ? 1 : 0)} />
+                  <Reveal key={`${tip.id}-${i}`} delay={i * 80} className="h-full">
+                    <TipCard tip={tip} index={i + 1} />
                   </Reveal>
                 ))}
               </div>
@@ -331,16 +419,43 @@ const GenericSection = ({ section }) => {
           <SectionTitle title={section.sectionName} />
         </Reveal>
         <div className="mt-8 space-y-5">
-          {contents.flatMap((c) => toLines(c.content)).map((p, i) => (
-            <Reveal key={i} delay={i * 60}>
-              <p className="text-lg leading-relaxed text-[#0B2545]/80">{p}</p>
-            </Reveal>
-          ))}
+          {contents
+            .flatMap((c) => toLines(c.content))
+            .map((p, i) => (
+              <Reveal key={i} delay={i * 60}>
+                <p className="text-lg leading-relaxed text-[#0B2545]/80">{p}</p>
+              </Reveal>
+            ))}
         </div>
       </div>
     </section>
   )
 }
+
+/* ---------- CTA Band ---------- */
+const CtaBand = () => (
+  <section className="relative overflow-hidden bg-gradient-to-br from-[#0B2545] via-[#13315c] to-[#0B2545] py-16 sm:py-20">
+    <div className="pointer-events-none absolute -left-24 top-0 h-72 w-72 rounded-full bg-[#A3E635]/15 blur-3xl" />
+    <div className="pointer-events-none absolute -right-24 bottom-0 h-72 w-72 rounded-full bg-[#A3E635]/10 blur-3xl" />
+    <div className="relative mx-auto max-w-3xl px-6 text-center">
+      <Reveal>
+        <SectionTitle
+          dark
+          eyebrow="Personal Care"
+          title="Want advice made for you?"
+          subtitle="Book a session and our team will build a wellness routine around your body and your goals."
+        />
+        <Link
+          to="/contact"
+          className="group mt-8 inline-flex items-center gap-2 rounded-full bg-[#A3E635] px-8 py-4 text-sm font-bold text-[#0B2545] shadow-lg shadow-[#A3E635]/30 transition-all duration-300 hover:-translate-y-0.5 hover:bg-[#b6f04f] hover:shadow-xl"
+        >
+          Book An Appointment
+          <ArrowRight />
+        </Link>
+      </Reveal>
+    </div>
+  </section>
+)
 
 /* =====================================================
    PAGE
@@ -373,18 +488,37 @@ const Tips = () => {
 
   if (loading) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center bg-white">
-        <div className="h-10 w-10 animate-spin rounded-full border-4 border-[#0B2545]/20 border-t-[#A3E635]" />
+      <div
+        className="flex min-h-[60vh] flex-col items-center justify-center gap-5 bg-white"
+        role="status"
+        aria-live="polite"
+      >
+        <div className="h-12 w-12 animate-spin rounded-full border-[3px] border-[#0B2545]/10 border-t-[#A3E635]" />
+        <p className="text-xs font-semibold uppercase tracking-[0.3em] text-[#0B2545]/40">
+          Loading
+        </p>
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center bg-white px-6 text-center">
+      <div
+        className="flex min-h-[60vh] items-center justify-center bg-white px-6 text-center"
+        role="alert"
+      >
         <div className="max-w-md">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#0B2545] text-[#A3E635]">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-7 w-7">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="h-7 w-7"
+              aria-hidden="true"
+            >
               <path d="M12 9v4M12 17h.01M10.3 3.9 2.7 18a2 2 0 0 0 1.7 3h15.2a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
             </svg>
           </div>
@@ -405,13 +539,14 @@ const Tips = () => {
     <>
       <main className="overflow-x-hidden bg-white">
         {sections.map((section) => {
-          const name = section.sectionName.trim().toLowerCase()
+          const name = normalizeName(section)
           if (name === 'hero') return <HeroSection key={section.id} section={section} />
           if (name === 'tips' || name === 'tip' || name === 'health tips')
             return <TipsSection key={section.id} section={section} />
           if (name === 'footer') return null
           return <GenericSection key={section.id} section={section} />
         })}
+        <CtaBand />
       </main>
       <Footer />
     </>
